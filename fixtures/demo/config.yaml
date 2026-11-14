@@ -1,0 +1,18 @@
+schema_version: 1
+project: lakeinlet-demo
+lake_root: lake
+as_of: "2025-03-01T04:00:00Z"
+sources:
+  - name: orders
+    partition_keys:
+      - dt
+      - region
+    allowed_lateness_seconds: 3600
+    future_tolerance_seconds: 300
+    sequence_policy: contiguous
+  - name: clicks
+    partition_keys:
+      - dt
+    allowed_lateness_seconds: 1800
+    future_tolerance_seconds: 300
+    sequence_policy: contiguous

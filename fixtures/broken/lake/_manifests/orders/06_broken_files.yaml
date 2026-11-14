@@ -1,0 +1,33 @@
+manifest_version: 1
+batch_id: orders-broken-files
+source: orders
+sequence: 6
+partition:
+  dt: '2025-03-01'
+  region: eu
+declared_at: '2025-03-01T02:00:00Z'
+files:
+- path: data/orders/missing.csv
+  sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+  bytes: 123
+  rows: 2
+  event_time_min: '2025-03-01T00:00:00Z'
+  event_time_max: '2025-03-01T00:30:00Z'
+- path: data/orders/tampered.csv
+  sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+  bytes: 10
+  rows: 5
+  event_time_min: '2025-03-01T00:00:00Z'
+  event_time_max: '2025-03-01T02:00:00Z'
+- path: data/orders/header_broken.csv
+  sha256: 9eb0cdd0f51f8ffae7f15628c12f0f001d02fd4827de7be603838b4010fde347
+  bytes: 67
+  rows: 1
+  event_time_min: '2025-03-01T01:00:00Z'
+  event_time_max: '2025-03-01T01:00:00Z'
+- path: data/orders/malformed.csv
+  sha256: 4d6f7eeeeb8ac70fff0da284e304fd5445b01b6aa7260b947efc6d26c0898765
+  bytes: 133
+  rows: 2
+  event_time_min: '2025-03-01T01:10:00Z'
+  event_time_max: '2025-03-01T01:11:00Z'

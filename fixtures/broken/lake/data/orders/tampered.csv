@@ -1,0 +1,4 @@
+record_id,event_time,dt,region,amount
+r-3001,2025-03-01T01:00:00Z,2025-03-01,eu,5
+r-3002,not-a-time,2025-03-01,eu,6
+,2025-03-01T01:02:00Z,2025-03-01,us,7

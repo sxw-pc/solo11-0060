@@ -1,0 +1,15 @@
+manifest_version: 1
+batch_id: orders-early
+source: orders
+sequence: 4
+partition:
+  dt: '2025-03-01'
+  region: eu
+declared_at: '2025-03-01T01:30:00Z'
+files:
+- path: data/orders/duplicate.csv
+  sha256: 8fbc96713e9ef56e9a84e2ddb840a1d5fb301e5d17593286649227fcdba2ba57
+  bytes: 128
+  rows: 2
+  event_time_min: '2025-03-01T01:05:00Z'
+  event_time_max: '2025-03-01T01:06:00Z'

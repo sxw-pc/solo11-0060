@@ -1,0 +1,15 @@
+manifest_version: 1
+batch_id: orders-eu-0001
+source: orders
+sequence: 1
+partition:
+  dt: '2025-03-01'
+  region: eu
+declared_at: '2025-03-01T00:30:00Z'
+files:
+- path: data/orders/orders_eu_0001.csv
+  sha256: 13987d768317eef1ed50baea7ea70753c78da8b8c523b3ef7bf14734cca5b807
+  bytes: 189
+  rows: 3
+  event_time_min: '2025-03-01T00:05:00Z'
+  event_time_max: '2025-03-01T00:10:00Z'

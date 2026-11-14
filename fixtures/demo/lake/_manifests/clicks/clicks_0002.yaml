@@ -1,0 +1,15 @@
+manifest_version: 1
+batch_id: clicks-0002
+source: clicks
+sequence: 2
+partition:
+  dt: '2025-03-01'
+declared_at: '2025-03-01T01:30:00Z'
+files:
+- path: data/clicks/clicks_0002.csv
+  sha256: d0b39978c828e1999de4a05c46cd82991d442e132e68ba4ae6c9ccbcb599feac
+  bytes: 123
+  rows: 2
+  event_time_min: '2025-03-01T01:05:00Z'
+  event_time_max: '2025-03-01T01:10:00Z'
+prev_batch_id: clicks-0001

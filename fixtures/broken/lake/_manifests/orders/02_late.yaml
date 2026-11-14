@@ -1,0 +1,15 @@
+manifest_version: 1
+batch_id: orders-late
+source: orders
+sequence: 3
+partition:
+  dt: '2025-03-01'
+  region: eu
+declared_at: '2025-03-01T01:20:00Z'
+files:
+- path: data/orders/late.csv
+  sha256: 683cddffcf40af60fa32ff33c4f89af321e8ac6487a84c73d30eedc84b2c05be
+  bytes: 126
+  rows: 2
+  event_time_min: '2025-03-01T00:10:00Z'
+  event_time_max: '2025-03-01T00:20:00Z'

@@ -1,0 +1,12 @@
+schema_version: 1
+project: lakeinlet-broken-demo
+lake_root: lake
+as_of: "2025-03-01T03:00:00Z"
+sources:
+  - name: orders
+    partition_keys:
+      - dt
+      - region
+    allowed_lateness_seconds: 600
+    future_tolerance_seconds: 60
+    sequence_policy: contiguous

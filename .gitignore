@@ -1,0 +1,24 @@
+# Generated audit output and local databases
+out/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.db
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.benchmarks/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Editors and OS files
+.DS_Store
+.idea/
+.vscode/

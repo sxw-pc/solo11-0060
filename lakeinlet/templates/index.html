@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>湖入水位台 · 本地只读台账</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site">
+    <div class="wrap site-inner">
+      <a class="brand" href="{{ url_for('index') }}">湖入水位台 <small>lakeinlet</small></a>
+      <nav class="muted">只读本地审计台账</nav>
+    </div>
+  </header>
+  <main class="wrap">
+    <div class="eyebrow">local read-only ledger</div>
+    <h1>审计运行</h1>
+    <p class="muted">所有页面仅从 SQLite 台账读取；查看器不提供写入接口，也不会上传数据。</p>
+
+    {% if runs %}
+    <div class="panel table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>状态</th>
+            <th>项目</th>
+            <th>as_of</th>
+            <th>run_id</th>
+            <th class="num">批次</th>
+            <th class="num">记录</th>
+            <th class="num">错误</th>
+            <th class="num">警告</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in runs %}
+          <tr>
+            <td><span class="status status-{{ run.status }}">{{ run.status }}</span></td>
+            <td>{{ run.project }}</td>
+            <td class="mono">{{ run.as_of }}</td>
+            <td><a class="mono" href="{{ url_for('run_detail', run_id=run.run_id) }}">{{ run.run_id }}</a></td>
+            <td class="num">{{ run.batch_count }}</td>
+            <td class="num">{{ run.record_count }}</td>
+            <td class="num">{{ run.error_count }}</td>
+            <td class="num">{{ run.warning_count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">台账中还没有审计运行。请先执行 <code>python -m lakeinlet audit</code>。</div>
+    {% endif %}
+  </main>
+  <footer class="foot">
+    <div class="wrap">lakeinlet 本地查看器 · 默认仅绑定回环地址 · 无外部资源</div>
+  </footer>
+</body>
+</html>

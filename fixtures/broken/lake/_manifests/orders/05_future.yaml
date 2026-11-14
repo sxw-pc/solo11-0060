@@ -1,0 +1,16 @@
+manifest_version: 1
+batch_id: orders-future
+source: orders
+sequence: 5
+partition:
+  dt: '2025-03-01'
+  region: eu
+declared_at: '2025-03-01T01:50:00Z'
+files:
+- path: data/orders/future.csv
+  sha256: 964c96f716f59e4663dba4b9d0378d9047b98f4837dc83b6d700e11d1c437d1c
+  bytes: 128
+  rows: 2
+  event_time_min: '2025-03-01T04:00:00Z'
+  event_time_max: '2025-03-01T04:05:00Z'
+prev_batch_id: orders-does-not-exist

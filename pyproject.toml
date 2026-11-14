@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lakeinlet"
+version = "0.1.0"
+description = "Offline data-lake ingestion watermark and idempotency auditor"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "lakeinlet contributors" }]
+dependencies = [
+  "Flask>=3.0,<4",
+  "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+lakeinlet = "lakeinlet.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["lakeinlet*"]
+
+[tool.setuptools.package-data]
+lakeinlet = ["templates/*.html", "static/*.css"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
