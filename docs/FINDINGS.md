@@ -55,7 +55,7 @@ manifest 解析失败只丢弃该 manifest，其他 manifest、文件和数据�
 | `FILE_READ_ERROR` | error | 文件存在但无法读取或计算摘要 | 检查权限、占用与文件损坏 |
 | `FILE_CHECKSUM_MISMATCH` | error | 实际 SHA-256 与 manifest 不一致 | 核对文件内容与声明的摘要 |
 | `FILE_BYTES_MISMATCH` | error | 声明了 `bytes` 且实际字节数不同 | 修正 manifest 或文件 |
-| `FILE_ROW_COUNT_MISMATCH` | error | 声明了 `rows` 且 CSV 物理数据行数不同 | 核对物理行数；注意有效记录数是另一个指标 |
+| `FILE_ROW_COUNT_MISMATCH` | error | 声明了 `rows` 且 CSV 物理数据行数不同 | 核对物理行数；有效记录数是另一个指标 |
 | `MANIFEST_EVENT_RANGE_MISMATCH` | error | 声明的事件时间最小/最大值与可解析记录不同 | 修正声明边界或数据 |
 | `CSV_READ_ERROR` | error | 无法打开、解析表头或解析中途出现 CSV 错误 | 检查编码、引号与分隔符 |
 | `CSV_EMPTY` | error | 没有表头行 | 提供带表头的 CSV |
@@ -90,9 +90,22 @@ manifest 解析失败只丢弃该 manifest，其他 manifest、文件和数据�
 | `DUPLICATE_BATCH_ID` | error | 多个有效 manifest 使用同一 `batch_id`（跨全部被审计 source） | 为每个批次分配唯一 ID |
 | `DUPLICATE_SEQUENCE` | error | 同一 source 内多个 manifest 使用同一非负 `sequence` | 修正序列号或删除重复声明 |
 | `DUPLICATE_FILE_DIGEST` | error | 多个实际存在且可读的数据文件共享同一 SHA-256 | 确认是否为有意的重放；避免重复入湖 |
-| `DUPLICATE_RECORD_ID` | error | 同一 source 内同一 `record_id` 出现多次 | 确认幂等键；移除重复记录或改用稳定唯一键 |
+| `DUPLICATE_RECORD_ID` | error | 同一 source 内同一 `record_id` 出现多次；报告同时给出保留条目、被覆盖条目与比较依据 | 确认幂等键与保留规则；移除重复记录或改用稳定唯一键 |
 
-`DUPLICATE_FILE_DIGEST` 使用实际摘要，而不是声明摘要；即使某文件同时存在校验和不符，只要可读就参与该检查。`DUPLICATE_RECORD_ID` 只统计同时具有非空记录标识和合法 UTC 事件时间的记录。
+`DUPLICATE_FILE_DIGEST` 使用实际摘要，而不是声明摘要；即使某文件同时存在校验和不符，只要可读就参与该检查。
+
+`DUPLICATE_RECORD_ID` 的 `evidence` 是可复算的收敛账，而不仅是出现次数：
+
+- `raw_count` / `count`：该 `record_id` 在同一 source 内的原始出现次数；
+- `effective_count`：收敛后保留的有效记录数（0 或 1）；
+- `retained`：最终保留位置（manifest、batch、文件、行、事件时间、所属批次 `declared_at`）；
+- `basis`：决定保留位的比较依据（`event_time`、`declared_at`、`location`、`sole_parseable_event_time`、`no_parseable_event_time`）；
+- `superseded`：每条被覆盖条目的原定位、事件时间（或原始文本）、可解析标记、所属批次、比较依据与最终保留位置；
+- `locations`：被覆盖条目的原定位摘要，保持旧字段兼容。
+
+收敛规则：`event_time` 更晚者保留；并列时所属批次 `declared_at` 更晚者保留；仍并列时按文件路径与行号升序取先者。事件时间无法解析的重复条目参与分组，但不参与比较，只作为被覆盖方留证，不会夺走合法记录的保留位。
+
+同一份收敛账也写入报告 JSON 的 `record_convergences[]`、Markdown/HTML 报告的「记录收敛账」章节与 SQLite 的 `record_convergences` 表。
 
 ### 序列与链
 
@@ -115,12 +128,14 @@ manifest 解析失败只丢弃该 manifest，其他 manifest、文件和数据�
 | `count` | 重复或问题数量 |
 | `samples` | 最多 3 条行级样例（CSV 问题） |
 | `locations` | 重复文件/记录所在 manifest、批次、文件与行号 |
+| `raw_count` / `effective_count` | 记录收敛：原始出现次数与收敛后保留数 |
+| `retained` / `superseded` / `basis` | 记录收敛：保留位置、被覆盖条目与比较依据 |
 | `sequence` / `range` / `missing_count` | 序列相关证据 |
 | `sha256` | 实际文件摘要 |
 | `event_time_max` / `safe_watermark_before` / `as_of` | 时间判断依据 |
 | `policy` | 触发缺口检查的序列策略 |
 
-CSV 聚合证据中的 `count` 是总数，`samples` 只保留前三条，避免报告无限膨胀。重复记录位置最多保留 10 条；分组总数仍完整。
+CSV 聚合证据中的 `count` 是总数，`samples` 只保留前三条，避免报告无限膨胀。重复记录的收敛账完整保留全部被覆盖条目（不截断），因为条目数由幂等键重复数决定；分组总数仍完整。
 
 ## 5. 顺序与去重
 
@@ -138,6 +153,6 @@ CSV 聚合证据中的 `count` 是总数，`samples` 只保留前三条，避免
 3. 对照 `watermarks[]` 的 `watermark_before`、`watermark_after` 与 `late`；
 4. 对文件完整性问题，核对 `expected` 与 `actual`；
 5. 对序列问题，检查 source 内全部有效 manifest，而不是只看当前分区；
-6. 对记录重复，查看 `locations` 中的文件与行号，确认是否为同一幂等键。
+6. 对记录重复，先在「记录收敛账」或 `record_convergences` 查看保留条目与比较依据，再回到 `superseded` 中核对被覆盖条目的文件与行号。
 
 工具只报告问题，不执行修复；修复应由数据拥有者在湖外流程中完成并重新生成 manifest。

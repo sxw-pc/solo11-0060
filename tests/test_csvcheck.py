@@ -72,7 +72,15 @@ def test_invalid_time_missing_id_and_partition_mismatch(tmp_path, demo_config):
         "PARTITION_MISMATCH",
     }
     assert result.row_count == 3
-    assert [record.record_id for record in result.records] == ["r3"]
+    # Identified rows keep their identity even when event_time is unparseable,
+    # so duplicate convergence can see them; event ranges ignore them.
+    assert [record.record_id for record in result.records] == ["r1", "r3"]
+    invalid = next(record for record in result.records if record.record_id == "r1")
+    assert invalid.event_time is None
+    assert invalid.event_time_parseable is False
+    assert invalid.raw_event_time == "not-a-time"
+    assert result.event_time_min.isoformat() == "2025-03-01T00:03:00+00:00"
+    assert result.event_time_max.isoformat() == "2025-03-01T00:03:00+00:00"
     mismatch = next(
         issue for issue in result.issues if issue.code == "PARTITION_MISMATCH"
     )

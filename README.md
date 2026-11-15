@@ -60,7 +60,7 @@ python -m lakeinlet serve --ledger out/demo/ledger.sqlite --host 127.0.0.1 --por
 python -m lakeinlet audit --config fixtures/broken/config.yaml --out out/broken
 ```
 
-故障场景默认以退出码 `1` 结束，并生成 20+ 条可定位的发现项。若只想生成报告、不把发现项当作命令失败，可加 `--fail-on never`。
+故障场景默认以退出码 `1` 结束，并生成 20+ 条可定位的发现项。若只想生成报告、不把发现项当作命令失败，可加 `--fail-on never`。该场景同时包含 4 组重复 `record_id` 的完整收敛账。
 
 ## 命令
 
@@ -163,7 +163,17 @@ files:
 
 审计会比较实际 SHA-256、字节数、行数、事件时间范围、表头、字段合法性、分区一致性，并检查重复记录标识。所有路径必须相对于 `lake_root`，绝对路径与 `..` 会被拒绝。
 
-报告中的 `record_count` 是成功解析的有效记录数；manifest 声明的物理行数校验由 `FILE_ROW_COUNT_MISMATCH` 单独负责。
+报告中的 `record_count` 是**收敛后的有效记录数**，`raw_record_count` 是具身份原始记录数（含事件时间无法解析的行）。manifest 声明的物理行数校验由 `FILE_ROW_COUNT_MISMATCH` 单独负责。
+
+### 记录收敛
+
+同一 source 内同一 `record_id` 有多条时，收敛为一条有效记录：
+
+1. `event_time` 更晚者保留；
+2. 并列时所属批次 `declared_at` 更晚者保留；
+3. 仍并列时按文件路径与行号升序取先者。
+
+`event_time` 无法解析的重复条目参与分组，但不参与比较，只作为被覆盖方留证——它们不会因为批次声明更晚而夺走合法记录的保留位。每条被覆盖条目都会在报告、`DUPLICATE_RECORD_ID` 证据、报告 JSON 的 `record_convergences` 与台账 `record_convergences` 表中写出原定位、最终保留位置和比较依据。收敛后的有效记录集供水位判定与批次事件时间范围使用。
 
 ## Fixtures
 
@@ -181,10 +191,12 @@ lakeinlet/
 ├── cli.py              # argparse 命令入口
 ├── config.py           # YAML 配置读取与静态校验
 ├── models.py           # 配置、manifest、扫描、发现项等模型
+├── summaries.py        # 批次、水位、source 汇总模型
 ├── audit_result.py     # 审计结果与 JSON 序列化
 ├── manifest.py         # manifest 发现、解析、路径安全
 ├── scanner.py          # 文件摘要、大小、行数与 CSV 扫描
 ├── csvcheck.py         # CSV 表头、字段、行、分区检查
+├── convergence.py      # 重复 record_id 的确定性收敛账
 ├── watermark.py        # 水位推进、迟到、未来时间
 ├── duplicates.py       # 批次/序列/文件摘要/记录标识幂等检查
 ├── sequence.py         # 序列缺口与 manifest 链检查

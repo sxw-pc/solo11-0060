@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .audit_result import AuditResult
+from .convergence import RecordConvergence
 from .models import Finding, partition_label
 from .timeutil import format_utc
 
@@ -44,6 +45,49 @@ def _finding_markdown(index: int, finding: Finding) -> str:
     return "\n".join(lines)
 
 
+def _convergence_markdown(account: RecordConvergence) -> str:
+    retained = account.retained
+    retained_cell = (
+        f"`{_cell(retained.file)}:{retained.line}` "
+        f"(batch `{_cell(retained.batch_id)}`, "
+        f"event_time `{_cell(format_utc(retained.event_time) if retained.event_time else None)}`)"
+        if retained is not None
+        else "—（无可解析事件时间，保留集为空）"
+    )
+    lines = [
+        f"### record_id `{_cell(account.record_id)}` · source `{_cell(account.source)}`",
+        "",
+        f"- 原始出现：{account.raw_count} 条；有效保留：{account.effective_count} 条；"
+        f"被覆盖：{len(account.superseded)} 条",
+        f"- 保留位置：{retained_cell}",
+        f"- 收敛依据：`{account.basis}`",
+        "",
+        "| 被覆盖位置 | 事件时间 | 可解析 | 批次 | 比较依据 |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for item in account.superseded:
+        location = item.location
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _cell(f"{location.file}:{location.line}"),
+                    _cell(
+                        format_utc(location.event_time)
+                        if location.event_time
+                        else (location.raw_event_time or None)
+                    ),
+                    "yes" if location.parseable else "no",
+                    _cell(f"{location.batch_id} @ {format_utc(location.declared_at)}"),
+                    _cell(f"{item.basis}: {item.detail}"),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_markdown(result: AuditResult) -> str:
     """Render the complete report without clocks, URLs, or external assets."""
     summary = result.summary_dict()
@@ -63,6 +107,7 @@ def render_markdown(result: AuditResult) -> str:
         f"| 批次数 | {summary['batch_count']} |",
         f"| 文件数 | {summary['file_count']} |",
         f"| 有效记录数 | {summary['record_count']} |",
+        f"| 原始记录数 | {summary['raw_record_count']} |",
         f"| 发现项 | {summary['finding_count']} |",
         f"| 错误 | {summary['error_count']} |",
         f"| 警告 | {summary['warning_count']} |",
@@ -70,8 +115,8 @@ def render_markdown(result: AuditResult) -> str:
         "",
         "## 数据源",
         "",
-        "| 数据源 | 分区键 | 允许迟到(s) | 未来容忍(s) | 序列策略 | 清单 | 文件 | 记录 | 错误 | 警告 |",
-        "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+        "| 数据源 | 分区键 | 允许迟到(s) | 未来容忍(s) | 序列策略 | 清单 | 文件 | 有效记录 | 原始记录 | 错误 | 警告 |",
+        "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for source in result.sources:
         lines.append(
@@ -86,6 +131,7 @@ def render_markdown(result: AuditResult) -> str:
                     str(source.manifest_count),
                     str(source.file_count),
                     str(source.record_count),
+                    str(source.raw_record_count),
                     str(source.error_count),
                     str(source.warning_count),
                 ]
@@ -135,8 +181,8 @@ def render_markdown(result: AuditResult) -> str:
             "",
             "## 批次",
             "",
-            "| 数据源 | batch_id | 序列 | 分区 | 声明时间 | 事件时间范围 | 记录 | 迟到 |",
-            "| --- | --- | ---: | --- | --- | --- | ---: | --- |",
+            "| 数据源 | batch_id | 序列 | 分区 | 声明时间 | 事件时间范围 | 有效记录 | 原始记录 | 迟到 |",
+            "| --- | --- | ---: | --- | --- | --- | ---: | ---: | --- |",
         ]
     )
     for batch in result.batches:
@@ -157,13 +203,31 @@ def render_markdown(result: AuditResult) -> str:
                     _cell(format_utc(batch.declared_at)),
                     _cell(event_range),
                     str(batch.record_count),
+                    str(batch.raw_record_count),
                     "yes" if batch.late else "no",
                 ]
             )
             + " |"
         )
     if not result.batches:
-        lines.append("| — | 无有效批次 | 0 | — | — | — | 0 | no |")
+        lines.append("| — | 无有效批次 | 0 | — | — | — | 0 | 0 | no |")
+
+    lines.extend(
+        [
+            "",
+            "## 记录收敛账",
+            "",
+            "> 同一 source 内同一 `record_id` 只保留一条有效记录：`event_time` 更晚者优先；"
+            "并列时所属批次 `declared_at` 更晚者优先；仍并列时按文件路径与行号的稳定次序取先者。"
+            "`event_time` 无法解析的重复条目参与分组并作为被覆盖方留证，但不参与比较。",
+            "",
+        ]
+    )
+    if not result.record_convergences:
+        lines.append("无重复 `record_id`，无需收敛。")
+    else:
+        for account in result.record_convergences:
+            lines.append(_convergence_markdown(account))
 
     lines.extend(["", "## 发现项", ""])
     if not result.findings:

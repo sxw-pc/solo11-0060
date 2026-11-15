@@ -40,6 +40,7 @@ def _summary_cards(result: AuditResult) -> str:
         ("batches", summary["batch_count"]),
         ("files", summary["file_count"]),
         ("records", summary["record_count"]),
+        ("raw records", summary["raw_record_count"]),
         ("findings", summary["finding_count"]),
         ("errors", summary["error_count"]),
         ("warnings", summary["warning_count"]),
@@ -63,6 +64,7 @@ def _source_rows(result: AuditResult) -> str:
             f'<td class="num">{source.manifest_count}</td>'
             f'<td class="num">{source.file_count}</td>'
             f'<td class="num">{source.record_count}</td>'
+            f'<td class="num">{source.raw_record_count}</td>'
             f'<td class="num">{source.error_count}</td>'
             f'<td class="num">{source.warning_count}</td>'
             "</tr>"
@@ -108,6 +110,7 @@ def _batch_rows(result: AuditResult) -> str:
             f"<td>{_cell(format_utc(batch.declared_at))}</td>"
             f"<td>{_e(event_range)}</td>"
             f'<td class="num">{batch.record_count}</td>'
+            f'<td class="num">{batch.raw_record_count}</td>'
             f"<td>{'yes' if batch.late else 'no'}</td>"
             "</tr>"
         )
@@ -147,6 +150,54 @@ def _findings_section(result: AuditResult) -> str:
     )
 
 
+def _convergence_section(result: AuditResult) -> str:
+    if not result.record_convergences:
+        return '<div class="empty">无重复 record_id，无需收敛。</div>'
+    blocks = [
+        '<p class="muted">同一 source 内同一 record_id 只保留一条有效记录：'
+        "event_time 更晚者优先；并列时所属批次 declared_at 更晚者优先；"
+        "仍并列时按文件路径与行号的稳定次序取先者。event_time 无法解析的重复条目"
+        "参与分组并作为被覆盖方留证，但不参与比较。</p>"
+    ]
+    for account in result.record_convergences:
+        retained = account.retained
+        retained_text = (
+            f"{retained.file}:{retained.line} "
+            f"(batch {retained.batch_id}, "
+            f"event_time {format_utc(retained.event_time) if retained.event_time else '—'})"
+            if retained is not None
+            else "—（无可解析事件时间，无保留记录）"
+        )
+        rows = []
+        for item in account.superseded:
+            location = item.location
+            rows.append(
+                "<tr>"
+                f'<td class="mono">{_e(location.file)}:{location.line}</td>'
+                f"<td class=\"mono\">{_cell(format_utc(location.event_time) if location.event_time else (location.raw_event_time or None))}</td>"
+                f"<td>{'yes' if location.parseable else 'no'}</td>"
+                f"<td>{_e(location.batch_id)} @ {_e(format_utc(location.declared_at))}</td>"
+                f"<td>{_e(item.basis)}: {_e(item.detail)}</td>"
+                "</tr>"
+            )
+        blocks.append(
+            '<details class="finding" open>'
+            f"<summary><strong>{_e(account.record_id)}</strong> · "
+            f"source {_e(account.source)} · 原始 {account.raw_count} 条 / "
+            f"有效 {account.effective_count} 条 / 被覆盖 {len(account.superseded)} 条</summary>"
+            '<div class="meta">'
+            f"<span>retained: {_e(retained_text)}</span>"
+            f"<span>basis: {_e(account.basis)}</span>"
+            "</div>"
+            '<div class="table-wrap"><table>'
+            "<thead><tr><th>被覆盖位置</th><th>事件时间</th><th>可解析</th>"
+            "<th>批次</th><th>比较依据</th></tr></thead><tbody>"
+            + "".join(rows)
+            + "</tbody></table></div></details>"
+        )
+    return "".join(blocks)
+
+
 def render_html(result: AuditResult) -> str:
     """Return a fully self-contained HTML document (no scripts or remote URLs)."""
     status = _badge(result.status, _STATUS_CLASSES, "status")
@@ -182,7 +233,7 @@ def render_html(result: AuditResult) -> str:
 
   <h2>数据源</h2>
   <div class="panel table-wrap"><table>
-    <thead><tr><th>数据源</th><th>分区键</th><th class="num">迟到窗口(s)</th><th class="num">未来容忍(s)</th><th>序列策略</th><th class="num">清单</th><th class="num">文件</th><th class="num">记录</th><th class="num">错误</th><th class="num">警告</th></tr></thead>
+    <thead><tr><th>数据源</th><th>分区键</th><th class="num">迟到窗口(s)</th><th class="num">未来容忍(s)</th><th>序列策略</th><th class="num">清单</th><th class="num">文件</th><th class="num">有效记录</th><th class="num">原始记录</th><th class="num">错误</th><th class="num">警告</th></tr></thead>
     <tbody>{_source_rows(result)}</tbody>
   </table></div>
 
@@ -195,9 +246,12 @@ def render_html(result: AuditResult) -> str:
 
   <h2>批次</h2>
   <div class="panel table-wrap"><table>
-    <thead><tr><th>数据源</th><th>batch_id</th><th class="num">序列</th><th>分区</th><th>声明时间</th><th>事件时间范围</th><th class="num">记录</th><th>迟到</th></tr></thead>
+    <thead><tr><th>数据源</th><th>batch_id</th><th class="num">序列</th><th>分区</th><th>声明时间</th><th>事件时间范围</th><th class="num">有效记录</th><th class="num">原始记录</th><th>迟到</th></tr></thead>
     <tbody>{_batch_rows(result)}</tbody>
   </table></div>
+
+  <h2>记录收敛账</h2>
+  {_convergence_section(result)}
 
   <h2>发现项</h2>
   <p class="muted">共 {result.finding_count} 项：{result.error_count} error，{result.warning_count} warning，{result.info_count} info。</p>

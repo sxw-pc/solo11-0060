@@ -52,11 +52,7 @@ def _sample(line: int, reason: str, **extra: Any) -> dict[str, Any]:
 def _sample_evidence(
     samples: list[dict[str, Any]], count: int, **extra: Any
 ) -> dict[str, Any]:
-    return {
-        "count": count,
-        "samples": samples[:_MAX_SAMPLES],
-        **extra,
-    }
+    return {"count": count, "samples": samples[:_MAX_SAMPLES], **extra}
 
 
 def inspect_csv(
@@ -213,13 +209,17 @@ def inspect_csv(
                         _sample(line, "partition values differ", values=mismatched)
                     )
 
-                if record_id and event_time is not None:
+                if record_id:
+                    # Records with an unparseable event time keep their identity
+                    # so duplicate grouping and convergence evidence can see
+                    # them; they are never candidates for the retained slot.
                     records.append(
                         Record(
                             record_id=record_id,
                             event_time=event_time,
                             file_path=relative_path,
                             line_number=line,
+                            raw_event_time=raw_event[:80],
                         )
                     )
         except csv.Error as exc:
@@ -253,10 +253,8 @@ def inspect_csv(
                     f"{invalid_time_count} CSV row(s) have an invalid UTC event time",
                     source,
                     manifest,
-                    {
-                        "path": relative_path,
-                        **_sample_evidence(invalid_times, invalid_time_count),
-                    },
+                    {"path": relative_path,
+                     **_sample_evidence(invalid_times, invalid_time_count)},
                 )
             )
         if missing_id_count:
@@ -266,10 +264,8 @@ def inspect_csv(
                     f"{missing_id_count} CSV row(s) have an empty record identifier",
                     source,
                     manifest,
-                    {
-                        "path": relative_path,
-                        **_sample_evidence(missing_ids, missing_id_count),
-                    },
+                    {"path": relative_path,
+                     **_sample_evidence(missing_ids, missing_id_count)},
                 )
             )
         if mismatch_count:
@@ -281,14 +277,12 @@ def inspect_csv(
                     manifest,
                     {
                         "path": relative_path,
-                        **_sample_evidence(
-                            partition_mismatches, mismatch_count
-                        ),
+                        **_sample_evidence(partition_mismatches, mismatch_count),
                     },
                 )
             )
 
-    event_times = [item.event_time for item in records]
+    event_times = [item.event_time for item in records if item.event_time is not None]
     return CsvInspection(
         header=header,
         row_count=row_count,

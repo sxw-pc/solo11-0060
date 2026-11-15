@@ -173,10 +173,22 @@ def _canonical(value: Any) -> str:
 
 @dataclass(slots=True, frozen=True)
 class Record:
+    """One CSV row carrying a record identity.
+
+    ``event_time`` is ``None`` when the field cannot be parsed as UTC. Such a
+    record still joins duplicate grouping and evidence, but is never a
+    candidate for the retained slot and never contributes to event ranges.
+    """
+
     record_id: str
-    event_time: datetime
+    event_time: datetime | None
     file_path: str
     line_number: int
+    raw_event_time: str = ""
+
+    @property
+    def event_time_parseable(self) -> bool:
+        return self.event_time is not None
 
 @dataclass(slots=True)
 class FileScan:
@@ -196,6 +208,11 @@ class FileScan:
     def effective_digest(self) -> str:
         return self.actual_sha256 or self.ref.sha256
 
+    @property
+    def raw_record_count(self) -> int:
+        """Physical rows that carry a non-empty record id (parseable or not)."""
+        return len(self.records)
+
 @dataclass(slots=True)
 class BatchScan:
     manifest: BatchManifest
@@ -204,6 +221,9 @@ class BatchScan:
     record_count: int = 0
     event_time_min: datetime | None = None
     event_time_max: datetime | None = None
+    raw_record_count: int = 0
+    superseded_record_count: int = 0
+    effective_records: tuple[Record, ...] = ()
 
     @property
     def source(self) -> str:
@@ -213,81 +233,9 @@ class BatchScan:
     def batch_id(self) -> str:
         return self.manifest.batch_id
 
-@dataclass(slots=True)
-class BatchSummary:
-    source: str
-    batch_id: str
-    sequence: int
-    partition: dict[str, str]
-    declared_at: datetime
-    manifest_relpath: str
-    file_count: int
-    record_count: int
-    event_time_min: datetime | None
-    event_time_max: datetime | None
-    watermark_before: datetime | None = None
-    watermark_after: datetime | None = None
-    late: bool = False
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "source": self.source,
-            "batch_id": self.batch_id,
-            "sequence": self.sequence,
-            "partition": dict(sorted(self.partition.items())),
-            "declared_at": format_utc(self.declared_at),
-            "manifest_path": self.manifest_relpath,
-            "file_count": self.file_count,
-            "record_count": self.record_count,
-            "event_time_min": _iso(self.event_time_min),
-            "event_time_max": _iso(self.event_time_max),
-            "watermark_before": _iso(self.watermark_before),
-            "watermark_after": _iso(self.watermark_after),
-            "late": self.late,
-        }
-
-@dataclass(slots=True, frozen=True)
-class Watermark:
-    source: str
-    partition: dict[str, str]
-    max_event_time: datetime | None
-    safe_watermark: datetime | None
-    batch_count: int
-    late_batch_count: int
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "source": self.source,
-            "partition": dict(sorted(self.partition.items())),
-            "max_event_time": _iso(self.max_event_time),
-            "safe_watermark": _iso(self.safe_watermark),
-            "batch_count": self.batch_count,
-            "late_batch_count": self.late_batch_count,
-        }
-
-@dataclass(slots=True)
-class SourceSummary:
-    name: str
-    partition_keys: tuple[str, ...]
-    allowed_lateness_seconds: int
-    future_tolerance_seconds: int
-    sequence_policy: str
-    manifest_count: int
-    file_count: int
-    record_count: int
-    error_count: int = 0
-    warning_count: int = 0
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "partition_keys": list(self.partition_keys),
-            "allowed_lateness_seconds": self.allowed_lateness_seconds,
-            "future_tolerance_seconds": self.future_tolerance_seconds,
-            "sequence_policy": self.sequence_policy,
-            "manifest_count": self.manifest_count,
-            "file_count": self.file_count,
-            "record_count": self.record_count,
-            "error_count": self.error_count,
-            "warning_count": self.warning_count,
-        }
+    @property
+    def records(self) -> tuple[Record, ...]:
+        """All identified rows in physical order, parseable or not."""
+        return tuple(
+            record for file_scan in self.files for record in file_scan.records
+        )

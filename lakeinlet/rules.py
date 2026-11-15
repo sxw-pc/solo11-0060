@@ -7,14 +7,11 @@ import json
 from collections import Counter
 
 from .audit_result import AuditResult
+from .convergence import apply_convergence, converge_records
 from .duplicates import find_duplicate_findings
 from .manifest import load_source_manifests
-from .models import (
-    AuditConfig,
-    BatchScan,
-    Finding,
-    SourceSummary,
-)
+from .models import AuditConfig, BatchScan, Finding
+from .summaries import SourceSummary
 from .scanner import scan_batch
 from .sequence import find_sequence_findings
 from .watermark import evaluate_watermarks, summarize_batches
@@ -81,8 +78,10 @@ def _source_summaries(
     scans_by_source = Counter(scan.source for scan in scans)
     files_by_source = Counter(scan.source for scan in scans for _ in scan.files)
     records_by_source = Counter()
+    raw_records_by_source = Counter()
     for scan in scans:
         records_by_source[scan.source] += scan.record_count
+        raw_records_by_source[scan.source] += scan.raw_record_count
     finding_counts = Counter(
         (finding.source, finding.severity) for finding in findings
     )
@@ -98,6 +97,7 @@ def _source_summaries(
                 manifest_count=scans_by_source[source.name],
                 file_count=files_by_source[source.name],
                 record_count=records_by_source[source.name],
+                raw_record_count=raw_records_by_source[source.name],
                 error_count=finding_counts[(source.name, "error")],
                 warning_count=finding_counts[(source.name, "warning")],
             )
@@ -120,7 +120,11 @@ def run_audit(config: AuditConfig) -> AuditResult:
             scans.append(scan)
             findings.extend(scan.issues)
 
-    findings.extend(find_duplicate_findings(scans))
+    # Collapse duplicate record ids per source once; duplicate findings,
+    # watermark inputs, and summary counts all read the same convergence set.
+    convergence = converge_records(scans)
+    apply_convergence(scans, convergence)
+    findings.extend(find_duplicate_findings(scans, convergence))
     for source in config.sources:
         findings.extend(
             find_sequence_findings(manifests_by_source[source.name], source)
@@ -144,8 +148,10 @@ def run_audit(config: AuditConfig) -> AuditResult:
         manifest_count=len(scans),
         file_count=sum(len(scan.files) for scan in scans),
         record_count=sum(scan.record_count for scan in scans),
+        raw_record_count=sum(scan.raw_record_count for scan in scans),
         config_digest="",
         status=_status(findings),
+        record_convergences=convergence.duplicate_accounts,
     )
     run_id, config_digest = _fingerprint(result, config, scans)
     result.config_digest = config_digest

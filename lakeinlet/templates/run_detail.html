@@ -28,6 +28,7 @@
       <div class="metric"><span>batches</span><strong>{{ run.batch_count }}</strong></div>
       <div class="metric"><span>files</span><strong>{{ run.file_count }}</strong></div>
       <div class="metric"><span>records</span><strong>{{ run.record_count }}</strong></div>
+      <div class="metric"><span>raw records</span><strong>{{ run.raw_record_count }}</strong></div>
       <div class="metric"><span>findings</span><strong>{{ run.finding_count }}</strong></div>
       <div class="metric"><span>errors</span><strong>{{ run.error_count }}</strong></div>
       <div class="metric"><span>warnings</span><strong>{{ run.warning_count }}</strong></div>
@@ -68,7 +69,8 @@
         <thead>
           <tr>
             <th>数据源</th><th>batch_id</th><th class="num">序列</th><th>分区</th>
-            <th>声明时间</th><th>事件时间范围</th><th class="num">记录</th><th>迟到</th>
+            <th>声明时间</th><th>事件时间范围</th><th class="num">有效记录</th>
+            <th class="num">原始记录</th><th class="num">被覆盖</th><th>迟到</th>
           </tr>
         </thead>
         <tbody>
@@ -81,6 +83,8 @@
             <td class="mono">{{ batch.declared_at }}</td>
             <td class="mono">{{ batch.event_time_min or '—' }} ~ {{ batch.event_time_max or '—' }}</td>
             <td class="num">{{ batch.record_count }}</td>
+            <td class="num">{{ batch.raw_record_count }}</td>
+            <td class="num">{{ batch.superseded_record_count }}</td>
             <td>{{ 'yes' if batch.late else 'no' }}</td>
           </tr>
           {% endfor %}
@@ -89,6 +93,49 @@
     </div>
     {% else %}
     <div class="empty">没有有效批次。</div>
+    {% endif %}
+
+    <h2>记录收敛账</h2>
+    {% if run.record_convergences %}
+    <p class="muted">同一 source 内同一 record_id 只保留一条有效记录：event_time 更晚者优先；
+      并列时所属批次 declared_at 更晚者优先；仍并列时按文件路径与行号的稳定次序取先者。
+      event_time 无法解析的重复条目参与分组并作为被覆盖方留证，但不参与比较。</p>
+    {% for account in run.record_convergences %}
+    <details class="finding" open>
+      <summary>
+        <strong class="mono">{{ account.record_id }}</strong> · {{ account.source }} ·
+        原始 {{ account.raw_count }} 条 / 有效 {{ account.effective_count }} 条 ·
+        被覆盖 {{ account.superseded | length }} 条
+      </summary>
+      <div class="meta">
+        <span>basis: {{ account.basis }}</span>
+        {% if account.retained %}
+        <span>retained: <code class="mono">{{ account.retained.file }}:{{ account.retained.line }}</code>
+          (batch {{ account.retained.batch_id }}, event_time {{ account.retained.event_time or '—' }})</span>
+        {% else %}
+        <span>retained: —（无可解析事件时间，无保留记录）</span>
+        {% endif %}
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>被覆盖位置</th><th>事件时间</th><th>可解析</th><th>批次</th><th>比较依据</th></tr></thead>
+          <tbody>
+            {% for item in account.superseded %}
+            <tr>
+              <td class="mono">{{ item.file }}:{{ item.line }}</td>
+              <td class="mono">{{ item.event_time or item.raw_event_time or '—' }}</td>
+              <td>{{ 'yes' if item.event_time_parseable else 'no' }}</td>
+              <td class="mono">{{ item.batch_id }} @ {{ item.declared_at }}</td>
+              <td>{{ item.basis }}: {{ item.detail }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endfor %}
+    {% else %}
+    <div class="empty">无重复 record_id，无需收敛。</div>
     {% endif %}
 
     <h2>发现项</h2>

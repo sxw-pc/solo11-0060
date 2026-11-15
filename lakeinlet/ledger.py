@@ -41,6 +41,9 @@ def write_run(
             connection.execute(
                 "DELETE FROM watermarks WHERE run_id = ?", (result.run_id,)
             )
+            connection.execute(
+                "DELETE FROM record_convergences WHERE run_id = ?", (result.run_id,)
+            )
             connection.execute("DELETE FROM batches WHERE run_id = ?", (result.run_id,))
             summary = result.summary_dict()
             connection.execute(
@@ -48,9 +51,10 @@ def write_run(
                 INSERT INTO runs (
                     run_id, project, status, as_of, recorded_at, config_digest,
                     manifest_count, batch_count, file_count, record_count,
+                    raw_record_count,
                     finding_count, error_count, warning_count, info_count,
                     report_json, report_md, report_html
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     project=excluded.project, status=excluded.status,
                     as_of=excluded.as_of, recorded_at=excluded.recorded_at,
@@ -59,6 +63,7 @@ def write_run(
                     batch_count=excluded.batch_count,
                     file_count=excluded.file_count,
                     record_count=excluded.record_count,
+                    raw_record_count=excluded.raw_record_count,
                     finding_count=excluded.finding_count,
                     error_count=excluded.error_count,
                     warning_count=excluded.warning_count,
@@ -78,6 +83,7 @@ def write_run(
                     summary["batch_count"],
                     summary["file_count"],
                     summary["record_count"],
+                    summary["raw_record_count"],
                     summary["finding_count"],
                     summary["error_count"],
                     summary["warning_count"],
@@ -133,6 +139,37 @@ def write_run(
                         watermark.late_batch_count,
                     ),
                 )
+            for ordinal, account in enumerate(result.record_convergences, start=1):
+                payload = account.to_dict()
+                connection.execute(
+                    """
+                    INSERT INTO record_convergences (
+                        run_id, ordinal, source, record_id, raw_count,
+                        effective_count, basis, retained_json, superseded_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        result.run_id,
+                        ordinal,
+                        account.source,
+                        account.record_id,
+                        account.raw_count,
+                        account.effective_count,
+                        account.basis,
+                        (
+                            json.dumps(payload["retained"], sort_keys=True,
+                                       ensure_ascii=False, separators=(",", ":"))
+                            if payload["retained"] is not None
+                            else None
+                        ),
+                        json.dumps(
+                            payload["superseded"],
+                            sort_keys=True,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    ),
+                )
             for ordinal, batch in enumerate(result.batches, start=1):
                 payload = batch.to_dict()
                 connection.execute(
@@ -140,9 +177,10 @@ def write_run(
                     INSERT INTO batches (
                         run_id, ordinal, manifest_path, source, batch_id,
                         sequence, partition_label, declared_at, file_count,
-                        record_count, event_time_min, event_time_max,
+                        record_count, raw_record_count, superseded_record_count,
+                        event_time_min, event_time_max,
                         watermark_before, watermark_after, late
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         result.run_id,
@@ -155,6 +193,8 @@ def write_run(
                         payload["declared_at"],
                         batch.file_count,
                         batch.record_count,
+                        batch.raw_record_count,
+                        batch.superseded_record_count,
                         payload["event_time_min"],
                         payload["event_time_max"],
                         payload["watermark_before"],
@@ -177,8 +217,8 @@ def read_runs(path: str | Path) -> list[dict[str, Any]]:
         rows = connection.execute(
             """
             SELECT run_id, project, status, as_of, recorded_at, manifest_count,
-                   batch_count, file_count, record_count, finding_count,
-                   error_count, warning_count, info_count
+                   batch_count, file_count, record_count, raw_record_count,
+                   finding_count, error_count, warning_count, info_count
             FROM runs ORDER BY as_of DESC, run_id DESC
             """
         ).fetchall()
@@ -218,6 +258,19 @@ def read_run(path: str | Path, run_id: str) -> dict[str, Any] | None:
             item["late"] = bool(item["late"])
             batches.append(item)
         result["batches"] = batches
+        result["record_convergences"] = [
+            _with_evidence(
+                dict(row),
+                json_field="superseded_json",
+                target="superseded",
+                extra_json_field="retained_json",
+                extra_target="retained",
+            )
+            for row in connection.execute(
+                "SELECT * FROM record_convergences WHERE run_id = ? ORDER BY ordinal",
+                (run_id,),
+            )
+        ]
         return result
     except sqlite3.Error as exc:
         raise LedgerError(f"cannot read ledger run: {exc}") from exc
@@ -225,10 +278,23 @@ def read_run(path: str | Path, run_id: str) -> dict[str, Any] | None:
         connection.close()
 
 
-def _with_evidence(row: dict[str, Any]) -> dict[str, Any]:
+def _with_evidence(
+    row: dict[str, Any],
+    json_field: str = "evidence_json",
+    target: str = "evidence",
+    *,
+    extra_json_field: str | None = None,
+    extra_target: str | None = None,
+) -> dict[str, Any]:
     try:
-        row["evidence"] = json.loads(row.pop("evidence_json"))
+        row[target] = json.loads(row.pop(json_field))
     except (TypeError, json.JSONDecodeError):
-        row["evidence"] = {}
-        row.pop("evidence_json", None)
+        row[target] = {}
+        row.pop(json_field, None)
+    if extra_json_field is not None and extra_target is not None:
+        raw = row.pop(extra_json_field, None)
+        try:
+            row[extra_target] = json.loads(raw) if raw is not None else None
+        except json.JSONDecodeError:
+            row[extra_target] = None
     return row

@@ -84,6 +84,21 @@ def test_security_headers_and_local_stylesheet(client):
     assert css.status_code == 200
     assert b"--accent" in css.data
 
+def test_broken_run_detail_shows_convergence_account(tmp_path, broken_result):
+    path = tmp_path / "ledger.sqlite"
+    write_run(broken_result, path)
+    app = create_app(path)
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    response = client.get(f"/run/{broken_result.run_id}")
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "记录收敛账" in body
+    assert "data/orders/copy.csv:2" in body
+    assert "unparseable_event_time" in body
+    assert "未修改入湖数据" not in body
+
+
 def test_server_does_not_open_database_for_writes(ledger, client):
     import sqlite3
 

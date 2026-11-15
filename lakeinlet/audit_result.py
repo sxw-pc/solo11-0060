@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from .models import BatchSummary, Finding, SourceSummary, Watermark
+from .convergence import RecordConvergence
+from .models import Finding
+from .summaries import BatchSummary, SourceSummary, Watermark
 from .timeutil import format_utc
 
 
@@ -22,8 +24,10 @@ class AuditResult:
     file_count: int
     record_count: int
     config_digest: str
+    raw_record_count: int = 0
     run_id: str = ""
     status: str = "passed"
+    record_convergences: tuple[RecordConvergence, ...] = ()
 
     @property
     def error_count(self) -> int:
@@ -47,6 +51,7 @@ class AuditResult:
             "batch_count": len(self.batches),
             "file_count": self.file_count,
             "record_count": self.record_count,
+            "raw_record_count": self.raw_record_count,
             "finding_count": self.finding_count,
             "error_count": self.error_count,
             "warning_count": self.warning_count,
@@ -65,5 +70,8 @@ class AuditResult:
             "sources": [source.to_dict() for source in self.sources],
             "watermarks": [watermark.to_dict() for watermark in self.watermarks],
             "batches": [batch.to_dict() for batch in self.batches],
+            "record_convergences": [
+                account.to_dict() for account in self.record_convergences
+            ],
             "findings": [finding.to_dict() for finding in self.findings],
         }

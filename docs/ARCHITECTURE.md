@@ -28,9 +28,10 @@ manifest discovery (source manifest_dir + glob)
    ▼
 file scanner ──► CSV parser ──► integrity and row findings
    │
+   ├──► record convergence (same source + record_id)
    ├──► duplicates (batch / sequence / digest / record id)
    ├──► sequence continuity + chain
-   └──► watermark engine (arrival order, late/future)
+   └──► watermark engine (arrival order, late/future, effective records)
               │
               ▼
         AuditResult (sorted findings, source summaries)
@@ -51,10 +52,12 @@ file scanner ──► CSV parser ──► integrity and row findings
 | `models.py` | 配置、manifest、扫描、发现项、批次、水位等强类型模型 |
 | `audit_result.py` | 顶层结果、计数与稳定 JSON 序列化结构 |
 | `manifest.py` | 发现 manifest、安全解析、schema 与路径校验、逐文件错误降级 |
-| `scanner.py` | SHA-256、字节数、CSV 扫描聚合、行数/事件范围对比 |
+| `scanner.py` | SHA-256、字节数、CSV 扫描聚合、行数/事件范围对比，保留逐条记录身份 |
 | `csvcheck.py` | 表头、必填列、行结构、UTC 事件时间、记录标识、分区一致性 |
+| `convergence.py` | 同 source 内重复 `record_id` 的确定性收敛、被覆盖条目的证据生成 |
 | `watermark.py` | 按声明到达顺序推进分区水位、迟到、未来事件、未来声明 |
-| `duplicates.py` | 批次 ID、source 序列、实际文件摘要、记录 ID 跨文件重复 |
+| `duplicates.py` | 批次 ID、source 序列、实际文件摘要、记录 ID 跨文件重复；把收敛账转为发现项 |
+| `summaries.py` | 报告面向的批次、水位与 source 汇总模型 |
 | `sequence.py` | `contiguous` 序列缺口、`prev_batch_id` 链存在性与前后关系 |
 | `rules.py` | 编排、发现项去重排序、source 汇总、状态、内容寻址 run id |
 | `ledger_schema.py` | 台账 schema、初始化、只读连接与兼容性检查 |
@@ -91,6 +94,8 @@ late_batch_count
 ```
 
 处理顺序是 manifest 的 `declared_at` 升序，`sequence` 与路径作为稳定的并列排序键。
+
+水位只读取收敛后的有效记录集：`BatchScan.effective_records` 决定 `record_count` 与 `event_time_min/max`。同一 `source` 内重复 `record_id` 在进入水位前已收敛为一条，原始记录数另存为 `raw_record_count`，因此损坏的重复行不会虚抬水位或被当作迟到依据。
 
 每个批次：
 

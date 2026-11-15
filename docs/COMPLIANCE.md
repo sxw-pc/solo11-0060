@@ -10,7 +10,7 @@
 | F2 | manifest 与文件扫描 | `manifest.py`、`scanner.py` | `test_manifest.py`、`test_scanner.py` |
 | F3 | CSV 完整性检查 | `csvcheck.py` | `test_csvcheck.py` |
 | F4 | 水位、迟到、未来时间 | `watermark.py` | `test_watermark.py` |
-| F5 | 重复与幂等检查 | `duplicates.py` | `test_duplicates.py` |
+| F5 | 重复、幂等与记录收敛 | `duplicates.py`、`convergence.py` | `test_duplicates.py`、`test_convergence.py` |
 | F6 | 序列缺口与链检查 | `sequence.py` | `test_sequence.py` |
 | F7 | 确定性报告与 SQLite 台账 | `report_*.py`、`ledger*.py` | `test_reports.py`、`test_ledger.py` |
 | F8 | 只读本地查看器 | `server.py`、`templates/`、`static/` | `test_server.py` |
@@ -53,7 +53,7 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 - 审计仅向用户指定的报告目录/台账路径写入。
 - 查看器通过 URI `mode=ro` 打开数据库，并执行 `PRAGMA query_only = ON`。
-- 查看器启动前校验 `PRAGMA user_version = 1` 与四张必需表。
+- 查看器启动前校验 `PRAGMA user_version = 2` 与五张必需表。
 - 查看器只注册 GET 路由：`/`、`/run/<run_id>`、`/healthz`；不存在写入、删除、上传或命令执行端点。
 
 ## 5. 无凭据与无外部地址
@@ -94,7 +94,7 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 | 查看器模板 | Jinja 自动转义；CSP `script-src 'none'` |
 | 响应头 | CSP、`X-Frame-Options: DENY`、`nosniff`、`no-referrer`、`no-store` |
 | 文件规模 | 摘要按 64 KiB 分块读取，不整体载入大文件 |
-| 证据膨胀 | CSV 样例最多 3 条；重复记录位置最多 10 条；序列缺失样例最多 100 个 |
+| 证据膨胀 | CSV 样例最多 3 条；重复记录的收敛账完整保留被覆盖条目；序列缺失样例最多 100 个 |
 
 ## 9. 仓库卫生
 
@@ -126,11 +126,11 @@ __pycache__/
 
 | 范围 | 行数 |
 | --- | ---: |
-| `lakeinlet/` + `tests/` 的 Python 代码（含测试） | 4441 |
-| 其中测试 | 约 1401 |
+| `lakeinlet/` + `tests/` 的 Python 代码（含测试） | 5486 |
+| 其中测试 | 约 1848 |
 | `static/style.css` | 288 |
-| Jinja 模板 | 179 |
-| Python 单文件最大行数 | 299（`lakeinlet/csvcheck.py`） |
+| Jinja 模板 | 228 |
+| Python 单文件最大行数 | 300（`lakeinlet/convergence.py`、`lakeinlet/ledger.py`） |
 
 - Python 总量处于 2500–4500 区间。
 - 所有 Python、CSS、模板与文档单文件均不超过 300 行。
@@ -147,9 +147,10 @@ python -m lakeinlet serve --ledger out/demo/ledger.sqlite --host 127.0.0.1 --por
 
 验收基线：
 
-- 测试全部通过（当前 107 项）；
-- 干净 fixture 状态 `passed`，0 发现项；
-- 故障 fixture 状态 `failed`，23 个 error，默认退出码 1；
+- 测试全部通过（当前 126 项）；
+- 干净 fixture 状态 `passed`，0 发现项，`record_count` 与 `raw_record_count` 同为 17；
+- 故障 fixture 状态 `failed`，24 个 error，默认退出码 1；有效记录 8 条、原始记录 13 条；
+- 故障 fixture 的 4 组重复 `record_id` 均给出保留位置、被覆盖条目与比较依据；
 - 查看器只绑定回环地址，非回环地址在启动前被拒绝；
 - 报告与台账可重复生成。
 
@@ -160,6 +161,8 @@ python -m lakeinlet serve --ledger out/demo/ledger.sqlite --host 127.0.0.1 --por
 - **证据可能含业务值**：CSV 样例、记录标识、分区值和文件路径会进入报告与台账。当前版本不做脱敏。使用真实数据时应控制 `out/` 的访问权限。
 - **非流式 manifest 处理**：manifest 列表、扫描结果与记录标识集合驻留内存；面向单机、小规模批次，未针对海量数据做流式优化。
 - **批次级迟到语义**：以批次最大事件时间判断迟到，不计算逐记录迟到比例；无有效事件时间的批次不推进水位。
+- **收敛仅按记录标识**：同一 `record_id` 视为同一逻辑记录；若上游存在同一 ID 多版本需要并存的场景，需要改用复合幂等键。
+- **收敛账规模**：被覆盖条目完整写入报告与台账，不做截断；极端重复度下证据体积会随重复行数增长。
 - **序列作用域**：序列连续性与重复按 source 检查，不按 partition 独立编号；这要求上游采用 source 级序列。
 - **SQLite 并发**：写入使用单事务；没有多写者协调或服务化锁。查看器只读，但长时间运行不会自动刷新已打开页面的数据。
 - **依赖安装**：首次安装 Python 包可能需要网络；运行期不需要。

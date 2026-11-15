@@ -29,6 +29,7 @@
             <th>run_id</th>
             <th class="num">批次</th>
             <th class="num">记录</th>
+            <th class="num">原始记录</th>
             <th class="num">错误</th>
             <th class="num">警告</th>
           </tr>
@@ -42,6 +43,7 @@
             <td><a class="mono" href="{{ url_for('run_detail', run_id=run.run_id) }}">{{ run.run_id }}</a></td>
             <td class="num">{{ run.batch_count }}</td>
             <td class="num">{{ run.record_count }}</td>
+            <td class="num">{{ run.raw_record_count }}</td>
             <td class="num">{{ run.error_count }}</td>
             <td class="num">{{ run.warning_count }}</td>
           </tr>

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from lakeinlet.models import BatchSummary, SourceConfig
+from lakeinlet.models import SourceConfig
+from lakeinlet.summaries import BatchSummary
 from lakeinlet.timeutil import parse_utc
 from lakeinlet.watermark import evaluate_watermarks
 

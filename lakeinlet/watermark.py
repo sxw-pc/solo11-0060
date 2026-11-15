@@ -6,14 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Mapping, Sequence
 
-from .models import (
-    BatchScan,
-    BatchSummary,
-    Finding,
-    SourceConfig,
-    Watermark,
-    partition_label,
-)
+from .models import BatchScan, Finding, SourceConfig, partition_label
+from .summaries import BatchSummary, Watermark
 from .timeutil import exceeds_future_tolerance, format_utc, safe_watermark
 
 
@@ -47,6 +41,8 @@ def summarize_batches(scans: Sequence[BatchScan]) -> list[BatchSummary]:
             record_count=scan.record_count,
             event_time_min=scan.event_time_min,
             event_time_max=scan.event_time_max,
+            raw_record_count=scan.raw_record_count,
+            superseded_record_count=scan.superseded_record_count,
         )
         for scan in ordered
     ]

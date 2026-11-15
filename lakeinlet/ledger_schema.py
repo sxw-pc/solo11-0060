@@ -7,7 +7,26 @@ from pathlib import Path
 
 from .errors import LedgerError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+_MIGRATIONS = {
+    1: (
+        "ALTER TABLE runs ADD COLUMN raw_record_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE batches ADD COLUMN raw_record_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE batches ADD COLUMN superseded_record_count INTEGER NOT NULL DEFAULT 0",
+        """CREATE TABLE IF NOT EXISTS record_convergences (
+            run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            raw_count INTEGER NOT NULL,
+            effective_count INTEGER NOT NULL,
+            basis TEXT NOT NULL,
+            retained_json TEXT,
+            superseded_json TEXT NOT NULL,
+            UNIQUE(run_id, ordinal)
+        )""",
+    )
+}
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
@@ -20,6 +39,7 @@ CREATE TABLE IF NOT EXISTS runs (
     batch_count INTEGER NOT NULL,
     file_count INTEGER NOT NULL,
     record_count INTEGER NOT NULL,
+    raw_record_count INTEGER NOT NULL DEFAULT 0,
     finding_count INTEGER NOT NULL,
     error_count INTEGER NOT NULL,
     warning_count INTEGER NOT NULL,
@@ -63,11 +83,25 @@ CREATE TABLE IF NOT EXISTS batches (
     declared_at TEXT NOT NULL,
     file_count INTEGER NOT NULL,
     record_count INTEGER NOT NULL,
+    raw_record_count INTEGER NOT NULL DEFAULT 0,
+    superseded_record_count INTEGER NOT NULL DEFAULT 0,
     event_time_min TEXT,
     event_time_max TEXT,
     watermark_before TEXT,
     watermark_after TEXT,
     late INTEGER NOT NULL,
+    UNIQUE(run_id, ordinal)
+);
+CREATE TABLE IF NOT EXISTS record_convergences (
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    record_id TEXT NOT NULL,
+    raw_count INTEGER NOT NULL,
+    effective_count INTEGER NOT NULL,
+    basis TEXT NOT NULL,
+    retained_json TEXT,
+    superseded_json TEXT NOT NULL,
     UNIQUE(run_id, ordinal)
 );
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id, ordinal);
@@ -100,7 +134,7 @@ def require_schema(connection: sqlite3.Connection, path: Path) -> None:
     except sqlite3.Error as exc:
         connection.close()
         raise LedgerError(f"cannot inspect ledger {path}: {exc}") from exc
-    required = {"runs", "findings", "watermarks", "batches"}
+    required = {"runs", "findings", "watermarks", "batches", "record_convergences"}
     if version != SCHEMA_VERSION or not required.issubset(tables):
         connection.close()
         raise LedgerError(
@@ -119,6 +153,14 @@ def initialize_ledger(path: str | Path) -> Path:
         raise LedgerError(f"cannot create ledger {ledger_path}: {exc}") from exc
     try:
         connection.execute("PRAGMA foreign_keys = ON")
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version not in (0, SCHEMA_VERSION):
+            if version not in _MIGRATIONS:
+                raise LedgerError(f"unsupported ledger schema version: {version}")
+            with connection:
+                for statement in _MIGRATIONS[version]:
+                    connection.execute(statement)
+                connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.executescript(_SCHEMA)
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if version not in (0, SCHEMA_VERSION):

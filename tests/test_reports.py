@@ -98,3 +98,66 @@ def test_broken_json_report_lists_expected_findings(broken_result):
         "FILE_CHECKSUM_MISMATCH",
     }.issubset(codes)
     assert all(item["evidence"] for item in payload["findings"])
+
+
+def test_demo_counts_are_not_rewritten_by_convergence(demo_result):
+    payload = json.loads(render_json(demo_result))
+    assert payload["summary"]["record_count"] == 17
+    assert payload["summary"]["raw_record_count"] == 17
+    assert payload["record_convergences"] == []
+    assert all(
+        batch["record_count"] == batch["raw_record_count"]
+        and batch["superseded_record_count"] == 0
+        for batch in payload["batches"]
+    )
+
+
+def test_broken_summary_separates_effective_and_raw_counts(broken_result):
+    payload = json.loads(render_json(broken_result))
+    summary = payload["summary"]
+    assert summary["raw_record_count"] == 13
+    assert summary["record_count"] == 8
+    assert summary["record_count"] < summary["raw_record_count"]
+    assert payload["record_convergences"]
+
+
+def test_counts_reconcile_raw_effective_and_superseded(broken_result):
+    payload = json.loads(render_json(broken_result))
+    total_superseded = sum(
+        account["raw_count"] - account["effective_count"]
+        for account in payload["record_convergences"]
+    )
+    assert total_superseded == 5
+    assert payload["summary"]["raw_record_count"] == (
+        payload["summary"]["record_count"] + total_superseded
+    )
+    for batch in payload["batches"]:
+        assert batch["raw_record_count"] == (
+            batch["record_count"] + batch["superseded_record_count"]
+        )
+
+
+def test_broken_audits_are_byte_stable(broken_config):
+    first = run_audit(broken_config)
+    second = run_audit(broken_config)
+    assert first.run_id == second.run_id
+    assert render_json(first) == render_json(second)
+    assert render_html(first) == render_html(second)
+
+
+def test_markdown_reports_convergence_account(broken_result):
+    rendered = render_markdown(broken_result)
+    assert "## 记录收敛账" in rendered
+    assert "原始记录数" in rendered
+    assert "data/orders/copy.csv:2" in rendered
+    assert "unparseable_event_time" in rendered
+    assert "not-a-time" in rendered
+    assert "被覆盖" in rendered
+
+
+def test_html_reports_convergence_account(broken_result):
+    rendered = render_html(broken_result)
+    assert "记录收敛账" in rendered
+    assert "data/orders/copy.csv:2" in rendered
+    assert "raw records" in rendered
+    assert "<script" not in rendered

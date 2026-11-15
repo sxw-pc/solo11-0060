@@ -12,17 +12,21 @@ AuditConfig 1 ── * SourceConfig
                               └── BatchScan 1 ── * FileScan 1 ── * Record
                                         │
                                         ▼
+                              收敛（convergence）
+                                        │
+                                        ▼
                                    AuditResult
                         ├── SourceSummary[]
                         ├── BatchSummary[]
                         ├── Watermark[]
+                        ├── RecordConvergence[]
                         └── Finding[]
                                         │
                                         ▼
                          report.{json,md,html} + ledger.sqlite
 ```
 
-`source + partition` 是水位的唯一状态键；`source` 也是记录标识重复检查的作用域。
+`source + partition` 是水位的唯一状态键；`source` 也是记录标识重复检查与记录收敛的作用域。`convergence.py` 负责收敛账，`duplicates.py` 把它转成发现项。
 
 ## 2. 配置模型
 
@@ -92,19 +96,52 @@ AuditConfig 1 ── * SourceConfig
 - 每个 partition 列的值必须与 manifest 分区完全一致（按字符串比较）；
 - 列数多于或少于表头的行会被视为 malformed，不参与记录级检查。
 
-`record_count` 表示**成功解析的记录数**：只有记录标识非空且事件时间合法的行才计入。它不等于物理行数；物理行数由 `FILE_ROW_COUNT_MISMATCH` 单独核对 manifest 的 `rows`。缺少关键列时仍统计物理行数，以便行数检查仍然有意义。
+`record_count` 表示**收敛后的有效记录数**：同一 source 内同一 `record_id` 只在收敛集里保留一条。收敛前的记录身份由两步得到：
+
+1. **原始记录数**（`raw_record_count`）：记录标识非空的物理行，包括事件时间无法解析的行；
+2. **有效记录数**（`record_count`）：其中事件时间可解析、且在重复收敛中未被他条覆盖的行。
+
+物理行数（含空 `record_id`、malformed 行）由 `FILE_ROW_COUNT_MISMATCH` 单独核对 manifest 的 `rows`。缺少关键列时仍统计物理行数，以便行数检查仍然有意义。
+
+### 4.1 记录收敛规则
+
+同一 `source` 内同一 `record_id` 有多条时，按以下次序确定唯一保留条目：
+
+1. `event_time` 更晚者保留；
+2. 并列时，所属批次 `declared_at` 更晚者保留；
+3. 仍并列时，按文件路径升序、行号升序排稳定次序，取**先者**保留。
+
+关键约束：
+
+- `event_time` 无法解析的重复条目**参与分组**，但**不参与比较**，始终作为被覆盖方留证；它们不会因批次声明更晚等原因夺走合法记录的保留位。
+- 一组内若没有任何可解析条目，则该组不保留任何记录，`effective_count` 为 0。
+- 唯一且可解析的记录直接进入有效集；唯一但事件时间非法的行不进入有效集（仍由 `CSV_INVALID_EVENT_TIME` 报告）。
+
+收敛账随报告 JSON 的 `record_convergences`、每条 `DUPLICATE_RECORD_ID` 的 `evidence`、Markdown/HTML 报告的「记录收敛账」章节与 SQLite 的 `record_convergences` 表输出，包含每条被覆盖条目的原定位、所属批次、事件时间（或原始文本）、最终保留位置与比较依据。
+
+### 4.2 收敛集的下游使用
+
+`BatchScan` 在收敛后同时保留：
+
+- `raw_record_count`：具身份物理行数（含不可解析）；
+- `record_count`：收敛后的有效记录数；
+- `superseded_record_count`：被本批其他记录覆盖的条目数；
+- `effective_records`：进入水位与摘要的有效记录。
+
+批次 `event_time_min/max` 仅由 `effective_records` 计算。水位、`LATE_BATCH`、`FUTURE_EVENT_TIME` 与批次汇总因此全部基于收敛后的有效记录集，而不是原始行集。汇总中的 `record_count` 是有效记录数，`raw_record_count` 是具身份原始记录数，两者并列保留、互不割裂。
 
 ## 5. 内部派生模型
 
-`FileScan` 保存声明引用、实际摘要/字节数、表头、物理行数、有效记录、有效事件范围与文件级发现项。
+`FileScan` 保存声明引用、实际摘要/字节数、表头、物理行数、带身份记录（含不可解析事件时间）、文件级有效事件范围与文件级发现项。
 
-`BatchScan` 聚合一个 manifest 的所有 `FileScan`，计算有效记录数及事件时间最小/最大值。
+`BatchScan` 聚合一个 manifest 的所有 `FileScan`；收敛前保存全部具身份记录，收敛后保存有效记录、有效记录数、原始记录数、被覆盖数与事件时间最小/最大值。
 
 `BatchSummary` 是报告与台账中的批次视图，包含：
 
 ```text
 source, batch_id, sequence, partition, declared_at, manifest_path,
-file_count, record_count, event_time_min, event_time_max,
+file_count, record_count, raw_record_count, superseded_record_count,
+event_time_min, event_time_max,
 watermark_before, watermark_after, late
 ```
 
@@ -148,6 +185,7 @@ batch_count, late_batch_count
     "batch_count": 6,
     "file_count": 6,
     "record_count": 17,
+    "raw_record_count": 17,
     "finding_count": 0,
     "error_count": 0,
     "warning_count": 0,
@@ -156,6 +194,7 @@ batch_count, late_batch_count
   "sources": [],
   "watermarks": [],
   "batches": [],
+  "record_convergences": [],
   "findings": []
 }
 ```
@@ -165,21 +204,23 @@ batch_count, late_batch_count
 - 空值统一为 JSON `null`；所有键排序，缩进 2 空格，文件以换行结束。
 - `summary.batch_count` 等于有效 manifest 数（即 `batches` 长度），不是 manifest 文件总数；无法解析的 manifest 只贡献发现项。
 
-`sources[]` 字段：`name`, `partition_keys`, `allowed_lateness_seconds`, `future_tolerance_seconds`, `sequence_policy`, `manifest_count`, `file_count`, `record_count`, `error_count`, `warning_count`。
+`sources[]` 字段：`name`, `partition_keys`, `allowed_lateness_seconds`, `future_tolerance_seconds`, `sequence_policy`, `manifest_count`, `file_count`, `record_count`, `raw_record_count`, `error_count`, `warning_count`。
 
 `watermarks[]` 字段：`source`, `partition`, `max_event_time`, `safe_watermark`, `batch_count`, `late_batch_count`。
 
-`batches[]` 字段：`source`, `batch_id`, `sequence`, `partition`, `declared_at`, `manifest_path`, `file_count`, `record_count`, `event_time_min`, `event_time_max`, `watermark_before`, `watermark_after`, `late`。
+`batches[]` 字段：`source`, `batch_id`, `sequence`, `partition`, `declared_at`, `manifest_path`, `file_count`, `record_count`, `raw_record_count`, `superseded_record_count`, `event_time_min`, `event_time_max`, `watermark_before`, `watermark_after`, `late`。
+
+`record_convergences[]` 字段：`source`, `record_id`, `raw_count`, `effective_count`, `retained`（保留位置证据或 null）, `basis`（决定保留位的比较依据）, `superseded[]`（被覆盖条目：原定位、`declared_at`、`event_time`、`raw_event_time`、`event_time_parseable`、`basis`、`detail`、`retained` 最终保留位置）。
 
 `findings[]` 字段：`severity`, `code`, `source`, `partition`, `batch_id`, `message`, `evidence`。
 
 ## 7. SQLite 台账
 
-数据库 `PRAGMA user_version = 1`，四张表：
+数据库 `PRAGMA user_version = 2`，五张表：
 
 ### `runs`
 
-主键 `run_id`。列：`project`, `status`, `as_of`, `recorded_at`, `config_digest`, `manifest_count`, `batch_count`, `file_count`, `record_count`, `finding_count`, `error_count`, `warning_count`, `info_count`, `report_json`, `report_md`, `report_html`。
+主键 `run_id`。列：`project`, `status`, `as_of`, `recorded_at`, `config_digest`, `manifest_count`, `batch_count`, `file_count`, `record_count`, `raw_record_count`, `finding_count`, `error_count`, `warning_count`, `info_count`, `report_json`, `report_md`, `report_html`。
 
 `recorded_at` 被有意设置为 `as_of`，而非真实墙钟时间，以保持确定性。报告路径是本机绝对路径。
 
@@ -193,6 +234,10 @@ batch_count, late_batch_count
 
 ### `batches`
 
-`run_id`, `ordinal`, `manifest_path`, `source`, `batch_id`, `sequence`, `partition_label`, `declared_at`, `file_count`, `record_count`, `event_time_min`, `event_time_max`, `watermark_before`, `watermark_after`, `late`（0/1）。`(run_id, ordinal)` 唯一。
+`run_id`, `ordinal`, `manifest_path`, `source`, `batch_id`, `sequence`, `partition_label`, `declared_at`, `file_count`, `record_count`, `raw_record_count`, `superseded_record_count`, `event_time_min`, `event_time_max`, `watermark_before`, `watermark_after`, `late`（0/1）。`(run_id, ordinal)` 唯一。
 
-写入以 `run_id` 幂等：先删除该运行的三类子表记录，再 upsert `runs` 并插入子记录，整个过程处于一个事务中。读取使用 SQLite `mode=ro` 和 `PRAGMA query_only=ON`。除上述审计元数据外，不复制原始 CSV 内容到台账。
+### `record_convergences`
+
+`run_id`, `ordinal`, `source`, `record_id`, `raw_count`, `effective_count`, `basis`, `retained_json`（保留位置证据，或 NULL）, `superseded_json`（被覆盖条目数组）。`(run_id, ordinal)` 唯一。该表使收敛账可直接 SQL 查询。
+
+写入以 `run_id` 幂等：先删除该运行的四类子表记录，再 upsert `runs` 并插入子记录，整个过程处于一个事务中。读取使用 SQLite `mode=ro` 和 `PRAGMA query_only=ON`。除上述审计元数据外，不复制原始 CSV 内容到台账。打开 v1 台账时会原地迁移到 v2（新增计数列与收敛账表）。

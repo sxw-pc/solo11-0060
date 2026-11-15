@@ -192,7 +192,13 @@ def _scan_file(
 def scan_batch(
     manifest: BatchManifest, source: SourceConfig, lake_root: Path
 ) -> BatchScan:
-    """Inspect all files declared by one manifest."""
+    """Inspect all files declared by one manifest.
+
+    The scan keeps every identified record on its ``FileScan`` so downstream
+    duplicate convergence, watermark reconstruction, and summary counts share
+    one convergence set. ``record_count`` here is the pre-convergence count of
+    parseable records; ``raw_record_count`` counts all rows with a record id.
+    """
     files = tuple(
         _scan_file(ref, manifest, source, lake_root) for ref in manifest.files
     )
@@ -200,11 +206,13 @@ def scan_batch(
     for file_scan in files:
         issues.extend(file_scan.issues)
     records = [record for file_scan in files for record in file_scan.records]
+    parseable = [record for record in records if record.event_time is not None]
     return BatchScan(
         manifest=manifest,
         files=files,
         issues=tuple(issues),
-        record_count=len(records),
-        event_time_min=min_time(*(item.event_time_min for item in files)),
-        event_time_max=max_time(*(item.event_time_max for item in files)),
+        record_count=len(parseable),
+        event_time_min=min_time(*(item.event_time for item in parseable)),
+        event_time_max=max_time(*(item.event_time for item in parseable)),
+        raw_record_count=len(records),
     )
