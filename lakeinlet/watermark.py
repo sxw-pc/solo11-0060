@@ -14,6 +14,7 @@ from .models import (
     Watermark,
     partition_label,
 )
+from .partition import scheme_of
 from .timeutil import exceeds_future_tolerance, format_utc, safe_watermark
 
 
@@ -80,7 +81,10 @@ def evaluate_watermarks(
         source = sources.get(batch.source)
         if source is None:
             continue
-        key = (batch.source, tuple(sorted(batch.partition.items())))
+        # The canonical partition identity is the only watermark state key:
+        # batches declaring eu and EU share one watermark when templates merge
+        # those spellings. BatchSummary.partition is already canonical.
+        key = (batch.source, scheme_of(source).identity_key(batch.partition))
         state = states.setdefault(key, _WatermarkState())
         before = state.safe_watermark
         batch.watermark_before = before

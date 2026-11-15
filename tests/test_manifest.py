@@ -58,7 +58,7 @@ def test_missing_required_field_becomes_finding(broken_config):
     manifests, findings = load_source_manifests(
         broken_config, broken_config.source_map["orders"]
     )
-    assert len(manifests) == 6
+    assert len(manifests) == 9
     codes = [finding.code for finding in findings]
     assert "MANIFEST_INVALID_FIELD" in codes
     invalid = next(item for item in findings if item.code == "MANIFEST_INVALID_FIELD")

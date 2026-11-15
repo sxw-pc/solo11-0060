@@ -7,6 +7,13 @@ sources:
     partition_keys:
       - dt
       - region
+    partition_templates:
+      dt:
+        case: none
+      region:
+        case: upper
+        aliases:
+          EU: [emea]
     allowed_lateness_seconds: 600
     future_tolerance_seconds: 60
     sequence_policy: contiguous

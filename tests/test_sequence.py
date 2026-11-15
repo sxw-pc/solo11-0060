@@ -17,7 +17,7 @@ def test_missing_sequence_number_is_detected(broken_config):
     gap = next(item for item in findings if item.code == "SEQUENCE_GAP")
     assert gap.evidence["missing_count"] == 1
     assert gap.evidence["missing_samples"] == [2]
-    assert gap.evidence["range"] == [1, 6]
+    assert gap.evidence["range"] == [1, 9]
 
 def test_gapped_policy_allows_missing_sequence_numbers(broken_config):
     source = broken_config.source_map["orders"]

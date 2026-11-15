@@ -120,3 +120,43 @@ def test_empty_initialized_ledger_is_readable(tmp_path):
     ledger = initialize_ledger(tmp_path / "empty.sqlite")
     assert verify_readable(ledger) == ledger.resolve()
     assert read_runs(ledger) == []
+
+
+def test_canonical_partition_labels_are_stable_across_runs(tmp_path, broken_config):
+    """Re-auditing identical inputs yields the same run id and partition labels."""
+    from lakeinlet.rules import run_audit
+
+    first = run_audit(broken_config)
+    second = run_audit(broken_config)
+    assert first.run_id == second.run_id
+
+    ledger = tmp_path / "ledger.sqlite"
+    write_run(first, ledger)
+    write_run(second, ledger)
+
+    runs = read_runs(ledger)
+    assert len(runs) == 1
+    detail = read_run(ledger, first.run_id)
+    assert detail is not None
+
+    # The ledger stores canonical partition spellings only (EU, not eu/EU mix).
+    batch_labels = {item["partition_label"] for item in detail["batches"]}
+    assert "dt=2025-03-01,region=EU" in batch_labels
+    assert "dt=2025-03-01,region=US" in batch_labels
+    assert not any("region=eu" in label for label in batch_labels)
+
+    watermark_labels = {
+        item["partition_label"] for item in detail["watermarks"]
+    }
+    assert watermark_labels == batch_labels
+
+    # The alias collision finding persists with its raw-value evidence.
+    collision = next(
+        item
+        for item in detail["findings"]
+        if item["code"] == "PARTITION_ALIAS_COLLISION"
+    )
+    assert collision["evidence"]["manifests"] == [
+        "_manifests/orders/08_collision_eu.yaml",
+        "_manifests/orders/09_collision_us.yaml",
+    ]

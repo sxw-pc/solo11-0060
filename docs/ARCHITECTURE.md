@@ -21,16 +21,19 @@
 
 ```text
 config.yaml
-   │  safe_load + static validation
+   │  safe_load + static validation (含 partition_templates 覆盖与别名冲突校验)
    ▼
 manifest discovery (source manifest_dir + glob)
    │  schema validation + safe path resolution
+   │  partition 经唯一分区身份函数归一（原始拼写保留在 raw_partition）
    ▼
 file scanner ──► CSV parser ──► integrity and row findings
+   │  行分区列经同一身份函数归一后再与 manifest 比较
    │
-   ├──► duplicates (batch / sequence / digest / record id)
+   ├──► partition alias collision (batch_id ↔ 规范分区不自洽)
+   ├──► duplicates (batch / sequence / digest / 规范分区内 record id)
    ├──► sequence continuity + chain
-   └──► watermark engine (arrival order, late/future)
+   └──► watermark engine (arrival order, late/future, 按规范分区分组)
               │
               ▼
         AuditResult (sorted findings, source summaries)
@@ -47,14 +50,15 @@ file scanner ──► CSV parser ──► integrity and row findings
 | 模块 | 职责 |
 | --- | --- |
 | `cli.py` | 参数解析、退出码、报告与台账写出顺序 |
-| `config.py` | YAML 读取、字段白名单、UTC 校验、路径约束、source 策略归一化 |
+| `config.py` | YAML 读取、字段白名单、UTC 校验、路径约束、source 策略与分区模板归一化 |
+| `partition.py` | 唯一分区身份函数（case/alias 归一）、模板静态校验、`PARTITION_ALIAS_COLLISION` 检测 |
 | `models.py` | 配置、manifest、扫描、发现项、批次、水位等强类型模型 |
 | `audit_result.py` | 顶层结果、计数与稳定 JSON 序列化结构 |
-| `manifest.py` | 发现 manifest、安全解析、schema 与路径校验、逐文件错误降级 |
+| `manifest.py` | 发现 manifest、安全解析、schema 与路径校验、分区归一、逐文件错误降级 |
 | `scanner.py` | SHA-256、字节数、CSV 扫描聚合、行数/事件范围对比 |
-| `csvcheck.py` | 表头、必填列、行结构、UTC 事件时间、记录标识、分区一致性 |
-| `watermark.py` | 按声明到达顺序推进分区水位、迟到、未来事件、未来声明 |
-| `duplicates.py` | 批次 ID、source 序列、实际文件摘要、记录 ID 跨文件重复 |
+| `csvcheck.py` | 表头、必填列、行结构、UTC 事件时间、记录标识、归一后分区一致性 |
+| `watermark.py` | 按声明到达顺序推进规范分区水位、迟到、未来事件、未来声明 |
+| `duplicates.py` | 批次 ID、source 序列、实际文件摘要、规范分区内记录 ID 跨文件重复 |
 | `sequence.py` | `contiguous` 序列缺口、`prev_batch_id` 链存在性与前后关系 |
 | `rules.py` | 编排、发现项去重排序、source 汇总、状态、内容寻址 run id |
 | `ledger_schema.py` | 台账 schema、初始化、只读连接与兼容性检查 |
@@ -81,7 +85,7 @@ file scanner ──► CSV parser ──► integrity and row findings
 
 ## 6. 水位算法
 
-对每个 `source + partition` 独立维护：
+对每个 `source + 规范 partition`（partition 值经 `partition_templates` 归一）独立维护：
 
 ```text
 max_observed_event_time

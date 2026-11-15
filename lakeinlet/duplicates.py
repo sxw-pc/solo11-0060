@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Sequence
+from typing import Mapping, Sequence
 
-from .models import BatchScan, Finding
+from .models import BatchScan, Finding, Record, SourceConfig
+from .partition import scheme_of
 
 
 def _location(scan: BatchScan, file_path: str) -> dict[str, str]:
@@ -16,8 +17,17 @@ def _location(scan: BatchScan, file_path: str) -> dict[str, str]:
     }
 
 
-def find_duplicate_findings(batches: Sequence[BatchScan]) -> list[Finding]:
-    """Return findings for repeated batch ids, sequences, digests, and records."""
+def find_duplicate_findings(
+    batches: Sequence[BatchScan],
+    sources: Mapping[str, SourceConfig] | None = None,
+) -> list[Finding]:
+    """Return findings for repeated batch ids, sequences, digests, and records.
+
+    Record identity is scoped to ``(source, canonical partition, record_id)``;
+    the partition is taken through the source's partition scheme so that raw
+    spelling differences never split or merge identities incorrectly.
+    """
+    sources = sources or {}
     findings: list[Finding] = []
 
     by_batch: dict[str, list[BatchScan]] = defaultdict(list)
@@ -94,36 +104,69 @@ def find_duplicate_findings(batches: Sequence[BatchScan]) -> list[Finding]:
             )
         )
 
-    by_record: dict[tuple[str, str], list[tuple[BatchScan, str, int]]] = defaultdict(list)
+    # (source, canonical partition identity, record_id) -> record occurrences.
+    by_record: dict[
+        tuple[str, tuple[tuple[str, str], ...], str],
+        list[tuple[BatchScan, Record]],
+    ] = defaultdict(list)
     for scan in batches:
+        source = sources.get(scan.source)
         for file_scan in scan.files:
             for record in file_scan.records:
-                by_record[(scan.source, record.record_id)].append(
-                    (scan, record.file_path, record.line_number)
-                )
-    for source, record_id in sorted(by_record):
-        group = by_record[(source, record_id)]
+                if source is not None and record.partition is not None:
+                    partition_identity = scheme_of(source).identity_key(
+                        record.partition
+                    )
+                else:
+                    # Defensive fallback for records produced without a scheme.
+                    partition_identity = tuple(
+                        sorted(scan.manifest.partition.items())
+                    )
+                by_record[
+                    (scan.source, partition_identity, record.record_id)
+                ].append((scan, record))
+
+    for source_name, partition_identity, record_id in sorted(by_record):
+        group = by_record[(source_name, partition_identity, record_id)]
         if len(group) < 2:
             continue
-        group.sort(key=lambda item: (item[1], item[2], item[0].batch_id))
+        group.sort(
+            key=lambda item: (
+                item[1].file_path,
+                item[1].line_number,
+                item[0].batch_id,
+            )
+        )
+        canonical_partition = dict(partition_identity)
+        raw_values: dict[str, set[str]] = defaultdict(set)
+        for _scan, record in group:
+            if record.raw_partition is not None:
+                for key, value in record.raw_partition.items():
+                    raw_values[key].add(value)
         findings.append(
             Finding(
                 "error",
                 "DUPLICATE_RECORD_ID",
                 f"record_id {record_id!r} appears {len(group)} times in source "
-                f"{source!r}",
-                source=source,
+                f"{source_name!r}",
+                source=source_name,
+                partition=canonical_partition,
                 evidence={
                     "record_id": record_id,
                     "count": len(group),
+                    "canonical_partition": canonical_partition,
+                    "raw_partition_values": {
+                        key: sorted(values)
+                        for key, values in sorted(raw_values.items())
+                    },
                     "locations": [
                         {
                             "manifest_path": scan.manifest.manifest_relpath,
                             "batch_id": scan.batch_id,
-                            "file": path,
-                            "line": line,
+                            "file": record.file_path,
+                            "line": record.line_number,
                         }
-                        for scan, path, line in group[:10]
+                        for scan, record in group[:10]
                     ],
                 },
             )

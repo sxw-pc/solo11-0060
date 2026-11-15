@@ -15,6 +15,7 @@ from .models import (
     Finding,
     SourceSummary,
 )
+from .partition import find_partition_alias_collisions
 from .scanner import scan_batch
 from .sequence import find_sequence_findings
 from .watermark import evaluate_watermarks, summarize_batches
@@ -120,10 +121,12 @@ def run_audit(config: AuditConfig) -> AuditResult:
             scans.append(scan)
             findings.extend(scan.issues)
 
-    findings.extend(find_duplicate_findings(scans))
+    findings.extend(find_duplicate_findings(scans, config.source_map))
     for source in config.sources:
+        source_manifests = manifests_by_source[source.name]
+        findings.extend(find_sequence_findings(source_manifests, source))
         findings.extend(
-            find_sequence_findings(manifests_by_source[source.name], source)
+            find_partition_alias_collisions(source_manifests, source)
         )
 
     summaries = summarize_batches(scans)

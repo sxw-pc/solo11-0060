@@ -15,6 +15,7 @@ import yaml
 
 from .errors import ManifestError
 from .models import AuditConfig, BatchManifest, FileRef, Finding, SourceConfig
+from .partition import scheme_of
 from .timeutil import parse_utc
 
 _SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
@@ -72,7 +73,13 @@ def _parse_optional_time(value: Any, field: str):
     except ValueError as exc:
         raise ManifestParseError("MANIFEST_INVALID_FIELD", str(exc), {"field": field}) from exc
 
-def _parse_partition(value: Any, source: SourceConfig) -> dict[str, str]:
+def _parse_partition(value: Any, source: SourceConfig) -> tuple[dict[str, str], dict[str, str]]:
+    """Parse the declared partition and return (raw, canonical) mappings.
+
+    The raw mapping preserves the manifest spelling for evidence; the canonical
+    mapping is produced by the source's partition scheme and is what every
+    downstream identity comparison must use.
+    """
     if not isinstance(value, dict):
         _fail("PARTITION_KEYS_INVALID", "partition must be a mapping")
     expected = set(source.partition_keys)
@@ -81,18 +88,19 @@ def _parse_partition(value: Any, source: SourceConfig) -> dict[str, str]:
         _fail("PARTITION_KEYS_INVALID",
               f"partition keys must be exactly {sorted(expected)}",
               expected=sorted(expected), actual=sorted(supplied))
-    result: dict[str, str] = {}
+    raw: dict[str, str] = {}
     for key in source.partition_keys:
-        raw = value[key]
-        if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+        raw_value = value[key]
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (str, int, float)):
             _fail("PARTITION_KEYS_INVALID",
                   f"partition value {key!r} must be a scalar", key=key)
-        text = str(raw)
+        text = str(raw_value)
         if not text.strip():
             _fail("PARTITION_KEYS_INVALID",
                   f"partition value {key!r} must not be empty", key=key)
-        result[key] = text
-    return result
+        raw[key] = text
+    canonical = scheme_of(source).normalize_partition(raw)
+    return raw, canonical
 
 def _parse_file_ref(
     raw: Any, index: int, lake_root: Path, source: SourceConfig
@@ -150,7 +158,9 @@ def parse_manifest_document(
     if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
         _fail("MANIFEST_INVALID_FIELD",
               "sequence must be a non-negative integer", field="sequence")
-    partition = _parse_partition(document.get("partition"), source)
+    raw_partition, partition = _parse_partition(
+        document.get("partition"), source
+    )
     try:
         declared_at = parse_utc(document.get("declared_at"), "declared_at")
     except ValueError as exc:
@@ -182,6 +192,7 @@ def parse_manifest_document(
         declared_at=declared_at,
         files=files,
         prev_batch_id=prev_batch_id,
+        raw_partition=raw_partition,
     )
 
 def load_manifest_file(

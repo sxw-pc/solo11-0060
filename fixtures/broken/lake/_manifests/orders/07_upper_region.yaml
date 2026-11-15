@@ -1,0 +1,15 @@
+manifest_version: 1
+batch_id: orders-upper-region
+source: orders
+sequence: 7
+partition:
+  dt: '2025-03-01'
+  region: EU
+declared_at: '2025-03-01T01:55:00Z'
+files:
+- path: data/orders/upper_region.csv
+  sha256: 99147447ebbd5174cc0ad5798977e28802bc83e122aa278c36d7514a4ca74ba4
+  bytes: 128
+  rows: 2
+  event_time_min: '2025-03-01T01:07:00Z'
+  event_time_max: '2025-03-01T01:08:00Z'

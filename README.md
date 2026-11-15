@@ -98,7 +98,7 @@ out/demo/
 
 ### 水位定义
 
-对每个 `source + partition`：
+对每个 `source + 规范 partition`（分区值经 `partition_templates` 归一）：
 
 ```text
 safe_watermark = max(observed event_time) - allowed_lateness_seconds
@@ -130,6 +130,15 @@ sources:
 - 相对路径以配置文件所在目录为基准解析。
 - `sequence_policy` 支持 `contiguous`（检查序列缺口）和 `gapped`（允许缺口，但仍检查重复和链）。
 - 每个 source 默认从 `<_manifest_dir>/*.yaml` 读取 manifest，默认目录为 `_manifests/<source>`。
+- 可选的 `partition_templates` 用 `case`（`none/upper/lower`）与 `aliases` 声明每个分区键的规范取值；配置后 manifest 声明、CSV 行分区、水位分组、重复判定与台账 `partition_label` 全部归一到同一规范值，原始拼写保留在证据中。例如：
+
+```yaml
+partition_templates:
+  region:
+    case: upper
+    aliases:
+      EU: [emea]   # eu、EU、emea 都归一为 EU
+```
 
 完整字段与静态校验规则见 [docs/CONFIG.md](docs/CONFIG.md)。
 
@@ -161,7 +170,7 @@ files:
 - `event_time`（可配置，必须为 UTC ISO-8601）；
 - 该 source 配置中的全部 partition key 列。
 
-审计会比较实际 SHA-256、字节数、行数、事件时间范围、表头、字段合法性、分区一致性，并检查重复记录标识。所有路径必须相对于 `lake_root`，绝对路径与 `..` 会被拒绝。
+审计会比较实际 SHA-256、字节数、行数、事件时间范围、表头、字段合法性、归一后的分区一致性，并检查规范分区内的重复记录标识。所有路径必须相对于 `lake_root`，绝对路径与 `..` 会被拒绝。仅大小写或别名差异（如 `eu` 对 `EU`）不再报 `PARTITION_MISMATCH`；同一 `batch_id` 的分区身份不自洽会报 `PARTITION_ALIAS_COLLISION`。
 
 报告中的 `record_count` 是成功解析的有效记录数；manifest 声明的物理行数校验由 `FILE_ROW_COUNT_MISMATCH` 单独负责。
 
@@ -170,7 +179,7 @@ files:
 仓库包含两套合成数据，不含真实公司、域名、个人数据或凭据：
 
 - `fixtures/demo/`：6 个批次、两个 source、三个 partition 的干净场景，审计状态为 `passed`。
-- `fixtures/broken/`：迟到批次、未来事件、序列缺口、重复批次/序列/文件摘要/记录、缺失文件、校验和不符、行数不符、坏表头、坏行、分区不一致与非法 manifest，审计状态为 `failed`。
+- `fixtures/broken/`：迟到批次、未来事件、序列缺口、重复批次/序列/文件摘要/记录、缺失文件、校验和不符、行数不符、坏表头、坏行、分区不一致、分区大小写/别名归一与跨分区 `batch_id` 冲突、非法 manifest，审计状态为 `failed`。
 
 故障场景是回归规则覆盖的主要证据集。
 

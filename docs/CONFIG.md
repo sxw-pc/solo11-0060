@@ -36,6 +36,23 @@ sources:
     sequence_policy: gapped
 ```
 
+带分区归一模板的写法：
+
+```yaml
+sources:
+  - name: orders
+    partition_keys: [dt, region]
+    partition_templates:
+      dt:
+        case: none
+      region:
+        case: upper
+        aliases:
+          EU: [emea]
+    allowed_lateness_seconds: 3600
+    future_tolerance_seconds: 300
+```
+
 所有字段名区分大小写。缩进必须合法；建议时间值加引号，避免 YAML 隐式类型带来的歧义。
 
 ## 3. 顶层字段
@@ -90,6 +107,39 @@ sources:
 - manifest 的 `partition` 键集合必须与它**完全相等**：不能缺、不能多。
 - CSV 必须包含所有这些列，且每行值与 manifest 相同。
 - 水位的状态键是 `source + 全部 partition key 的值`。
+
+### `partition_templates`
+
+- 可选。声明每个分区键的**规范取值规则**；未配置时归一化是恒等函数，历史行为完全不变。
+- 一旦出现该字段，必须覆盖 `partition_keys` 中的**每一个键**，不能缺、不能多；否则配置错误。
+- 每个键对应一个映射，仅允许两个字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `case` | 可选，`none`（默认，保持原样）、`upper`（大写）、`lower`（小写）。先对原始值做大小写折叠，再查别名。 |
+| `aliases` | 可选，映射 `规范值: [额外原始拼写...]`。规范值自身（按 `case` 折叠后）始终是合法拼写。 |
+
+示例 `{region: upper, alias: {emea: [eu, EU]}}` 对应的 YAML 为：
+
+```yaml
+partition_templates:
+  region:
+    case: upper
+    aliases:
+      EMEA: [eu, EU]
+```
+
+此时 `emea`、`EMEA`、`eu`、`EU` 全部归一到同一规范分区 `EMEA`。
+
+加载配置时的静态校验（任一不满足即配置错误，退出码 2）：
+
+- 模板键集合与 `partition_keys` 不完全相等；
+- `case` 不在 `none/upper/lower` 内，或存在未知模板字段；
+- 别名列表不是字符串列表、规范值或别名不是非空字符串；
+- 同一键内，两个原始拼写（含规范值自身）经 `case` 折叠后落到同一规范值——别名键不得与自身或同键其它别名冲突；
+- 两个规范值经 `case` 折叠后相互冲突（例如 `case: lower` 下同时声明 `eu` 与 `EU`）。
+
+归一化是全链路**唯一**的分区身份来源：manifest 声明、CSV 每行分区列、水位分组键、重复记录分组、台账 `partition_label` 都经过同一函数得到同一规范值。报告的 `partition` 字段只展示规范值；原始拼写与模板命名保留在 finding 的 `evidence`（如 `raw_actual`、`raw_expected`、`raw_partition_values`、`raw_value_mapping`）中供追溯。普通别名归并不产生 finding；只有 `PARTITION_ALIAS_COLLISION` 描述的冲突才报错（见 FINDINGS.md）。
 
 ### `allowed_lateness_seconds`
 
@@ -189,5 +239,8 @@ config directory
 - `sources[0] contains unknown keys: ...`：字段拼写错误或使用了不支持键。
 - `sources[0].manifest_dir must be a relative path without '..'`：把 manifest 目录写成了绝对路径或试图越界。
 - `sources[0].allowed_lateness_seconds must be a non-negative integer`：使用了小数、负数、布尔或字符串。
+- `sources[0].partition_templates must cover every partition key; missing: ...`：模板没有覆盖全部分区键（或出现了不属于 `partition_keys` 的键）。
+- `... aliases: raw value ... already resolves to ...`：别名与同键其它拼写（含规范值）在大小写折叠后冲突。
+- `... aliases: canonical values ... collide after case=... normalization`：两个规范值在所选 `case` 下不可区分。
 
 修正后运行 `python -m lakeinlet validate --config <path>` 可快速确认。配置错误属于操作错误，不会生成部分报告。

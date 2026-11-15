@@ -64,7 +64,7 @@ manifest 解析失败只丢弃该 manifest，其他 manifest、文件和数据�
 | `CSV_MALFORMED_ROWS` | error | 某行列数与表头不一致 | 修正引号、分隔符或补齐字段 |
 | `CSV_INVALID_EVENT_TIME` | error | 事件时间为空、非 ISO-8601、无时区或非 UTC | 改为 `...Z` 或 `+00:00` |
 | `CSV_MISSING_RECORD_ID` | error | 记录标识为空字符串 | 提供稳定且非空的记录标识 |
-| `PARTITION_MISMATCH` | error | CSV 行的分区列值与 manifest 不同 | 修正行分区值或 manifest 分区 |
+| `PARTITION_MISMATCH` | error | CSV 行分区列与 manifest 在**归一化之后**规范值不同；仅大小写或别名差异（如 `eu` 对 `EU`）不再报此问题。证据含规范 `expected`/`actual` 与原始 `raw_expected`/`raw_actual` | 修正行分区值或 manifest 分区 |
 
 文件摘要、字节数、行数、事件范围和 CSV 内容问题可以同时出现；审计不会在第一个问题处停止。
 
@@ -90,9 +90,12 @@ manifest 解析失败只丢弃该 manifest，其他 manifest、文件和数据�
 | `DUPLICATE_BATCH_ID` | error | 多个有效 manifest 使用同一 `batch_id`（跨全部被审计 source） | 为每个批次分配唯一 ID |
 | `DUPLICATE_SEQUENCE` | error | 同一 source 内多个 manifest 使用同一非负 `sequence` | 修正序列号或删除重复声明 |
 | `DUPLICATE_FILE_DIGEST` | error | 多个实际存在且可读的数据文件共享同一 SHA-256 | 确认是否为有意的重放；避免重复入湖 |
-| `DUPLICATE_RECORD_ID` | error | 同一 source 内同一 `record_id` 出现多次 | 确认幂等键；移除重复记录或改用稳定唯一键 |
+| `DUPLICATE_RECORD_ID` | error | 同一 source、同一**规范分区**内同一 `record_id` 出现多次（分区先经 `partition_templates` 归一）；证据含 `canonical_partition` 与 `raw_partition_values` | 确认幂等键；移除重复记录或改用稳定唯一键 |
+| `PARTITION_ALIAS_COLLISION` | error | 同一 `batch_id` 出现以下任一情况：①两个不同原始分区值归一后落到同一规范分区；②同一 `batch_id` 出现在多个规范分区下。证据含 `reason`、`raw_value_mapping`（规范分区↔原始值↔manifest）与涉及的 manifest 列表 | 统一同一批次的分区声明，或为不同分区分配不同 `batch_id` |
 
 `DUPLICATE_FILE_DIGEST` 使用实际摘要，而不是声明摘要；即使某文件同时存在校验和不符，只要可读就参与该检查。`DUPLICATE_RECORD_ID` 只统计同时具有非空记录标识和合法 UTC 事件时间的记录。
+
+普通别名归并本身**不**产生 finding：不同 manifest 用 `eu`、`EU`、`emea` 描述同一规范分区是预期行为，只会共享同一水位与重复记录作用域。只有同一 `batch_id` 的分区身份不自洽（`PARTITION_ALIAS_COLLISION` 的两种情形）才报 error。
 
 ### 序列与链
 
@@ -119,6 +122,9 @@ manifest 解析失败只丢弃该 manifest，其他 manifest、文件和数据�
 | `sha256` | 实际文件摘要 |
 | `event_time_max` / `safe_watermark_before` / `as_of` | 时间判断依据 |
 | `policy` | 触发缺口检查的序列策略 |
+| `raw_expected` / `raw_actual` | 分区比较中 manifest/CSV 行的原始分区拼写（规范值在 `expected`/`actual`） |
+| `canonical_partition` / `raw_partition_values` | 重复记录所属的规范分区与全部原始拼写 |
+| `raw_value_mapping` | 分区别名冲突中规范分区、原始值与 manifest 的对应关系 |
 
 CSV 聚合证据中的 `count` 是总数，`samples` 只保留前三条，避免报告无限膨胀。重复记录位置最多保留 10 条；分组总数仍完整。
 

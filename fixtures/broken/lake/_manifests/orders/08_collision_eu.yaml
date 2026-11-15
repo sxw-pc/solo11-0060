@@ -1,0 +1,15 @@
+manifest_version: 1
+batch_id: orders-cross-region
+source: orders
+sequence: 8
+partition:
+  dt: '2025-03-01'
+  region: EU
+declared_at: '2025-03-01T02:05:00Z'
+files:
+- path: data/orders/collision_eu.csv
+  sha256: ef836993d9dfe11e1d1f20279e41e44c13667f5802f5563aaa0ec787f6de0dd5
+  bytes: 128
+  rows: 2
+  event_time_min: '2025-03-01T02:01:00Z'
+  event_time_max: '2025-03-01T02:02:00Z'

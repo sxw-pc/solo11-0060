@@ -22,7 +22,7 @@ AuditConfig 1 ── * SourceConfig
                          report.{json,md,html} + ledger.sqlite
 ```
 
-`source + partition` 是水位的唯一状态键；`source` 也是记录标识重复检查的作用域。
+`source + 规范 partition`（经 `partition_templates` 归一）是水位的唯一状态键；重复记录检查的作用域是 `source + 规范 partition + record_id`。manifest 声明、CSV 行分区列、水位分组、重复判定与台账 `partition_label` 全部经由同一个分区身份函数。
 
 ## 2. 配置模型
 
@@ -49,6 +49,7 @@ AuditConfig 1 ── * SourceConfig
 | `manifest_glob` | glob | `*.yaml` | 仅在该目录内匹配 |
 | `event_time_field` | 标识符 | `event_time` | CSV 事件时间列 |
 | `record_id_field` | 标识符 | `record_id` | CSV 记录标识列 |
+| `partition_templates` | 映射 | 无 | 每个分区键的 `case`/`aliases` 规范；出现时必须覆盖全部分区键 |
 
 布尔值不能充当整数；未知字段会被拒绝。完整校验规则见 [CONFIG.md](CONFIG.md)。
 
@@ -67,7 +68,7 @@ AuditConfig 1 ── * SourceConfig
 | `files` | 非空列表 | 是 | 文件引用，同一路径不得重复 |
 | `prev_batch_id` | 非空字符串 | 否 | 声明前驱批次，用于链检查 |
 
-分区值允许字符串、整数或浮点数，最终统一转为字符串；布尔、空值、空字符串和容器被拒绝。
+分区值允许字符串、整数或浮点数，最终统一转为字符串；布尔、空值、空字符串和容器被拒绝。原始拼写保存在 `raw_partition`，而 `partition` 保存经 source 分区模板归一后的**规范值**；报告、水位与台账只使用规范值。
 
 文件引用：
 
@@ -89,7 +90,7 @@ AuditConfig 1 ── * SourceConfig
 - 表头名去除首尾空白；重复表头会报告；
 - 每行事件时间必须是带 UTC 偏移的 ISO-8601；
 - 每行记录标识必须非空；
-- 每个 partition 列的值必须与 manifest 分区完全一致（按字符串比较）；
+- 每个 partition 列的值经分区模板归一后必须与 manifest 的规范分区一致；仅大小写/别名差异（如 `eu` 对 `EU`）不算 `PARTITION_MISMATCH`，规范值不同才报错，原始拼写保留在证据中；
 - 列数多于或少于表头的行会被视为 malformed，不参与记录级检查。
 
 `record_count` 表示**成功解析的记录数**：只有记录标识非空且事件时间合法的行才计入。它不等于物理行数；物理行数由 `FILE_ROW_COUNT_MISMATCH` 单独核对 manifest 的 `rows`。缺少关键列时仍统计物理行数，以便行数检查仍然有意义。

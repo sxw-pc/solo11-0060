@@ -31,9 +31,13 @@ class SourceConfig:
     manifest_glob: str = "*.yaml"
     event_time_field: str = "event_time"
     record_id_field: str = "record_id"
+    # Optional canonical partition rules; identity normalization when absent.
+    # Typed as Any to keep models.py free of a partition.py dependency; the
+    # concrete type is lakeinlet.partition.PartitionScheme.
+    partition_scheme: Any = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "name": self.name,
             "partition_keys": list(self.partition_keys),
             "allowed_lateness_seconds": self.allowed_lateness_seconds,
@@ -44,6 +48,11 @@ class SourceConfig:
             "event_time_field": self.event_time_field,
             "record_id_field": self.record_id_field,
         }
+        # Only present when the source actually rewrites partition values, so
+        # template-less configurations keep their historical config digest.
+        if self.partition_scheme is not None and self.partition_scheme.active:
+            payload["partition_templates"] = self.partition_scheme.to_dict()
+        return payload
 
 @dataclass(slots=True, frozen=True)
 class AuditConfig:
@@ -95,6 +104,13 @@ class BatchManifest:
     declared_at: datetime
     files: tuple[FileRef, ...]
     prev_batch_id: str | None = None
+    # Original manifest partition spelling; ``partition`` holds the canonical
+    # identity produced by the source's partition scheme.
+    raw_partition: dict[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.raw_partition is None:
+            self.raw_partition = dict(self.partition)
 
     @property
     def partition_label(self) -> str:
@@ -107,6 +123,7 @@ class BatchManifest:
             "source": self.source,
             "sequence": self.sequence,
             "partition": dict(sorted(self.partition.items())),
+            "raw_partition": dict(sorted(self.raw_partition.items())),
             "declared_at": format_utc(self.declared_at),
             "prev_batch_id": self.prev_batch_id,
             "files": [item.to_dict() for item in self.files],
@@ -177,6 +194,10 @@ class Record:
     event_time: datetime
     file_path: str
     line_number: int
+    # Canonical partition identity of the row; raw row spelling is kept for
+    # traceability in duplicate-record evidence.
+    partition: dict[str, str] | None = None
+    raw_partition: dict[str, str] | None = None
 
 @dataclass(slots=True)
 class FileScan:

@@ -106,3 +106,164 @@ def test_invalid_yaml_is_rejected(config_writer):
 def test_missing_config_file_is_rejected(tmp_path):
     with pytest.raises(ConfigError, match="not found"):
         load_config(tmp_path / "missing.yaml")
+
+
+def _with_templates(config_writer, templates: dict):
+    def mutate(data):
+        data["sources"][0]["partition_templates"] = templates
+
+    return load_config(config_writer(mutate))
+
+
+def test_partition_templates_are_parsed_and_normalize_values(config_writer):
+    config = _with_templates(
+        config_writer,
+        {
+            "dt": {"case": "none"},
+            "region": {"case": "upper", "aliases": {"EU": ["emea"]}},
+        },
+    )
+    scheme = config.sources[0].partition_scheme
+    assert scheme.active is True
+    assert scheme.normalize_value("region", "eu") == "EU"
+    assert scheme.normalize_value("region", "EU") == "EU"
+    assert scheme.normalize_value("region", "emea") == "EU"
+    assert scheme.normalize_value("region", "EMEA") == "EU"
+    assert scheme.normalize_value("dt", "2025-03-01") == "2025-03-01"
+    assert scheme.identity_key({"dt": "2025-03-01", "region": "eu"}) == (
+        ("dt", "2025-03-01"),
+        ("region", "EU"),
+    )
+
+
+def test_lower_case_template_normalizes_to_lower(config_writer):
+    config = _with_templates(
+        config_writer, {"dt": {"case": "none"}, "region": {"case": "lower"}}
+    )
+    scheme = config.sources[0].partition_scheme
+    assert scheme.normalize_value("region", "EU") == "eu"
+
+
+def test_missing_template_coverage_is_rejected(config_writer):
+    with pytest.raises(ConfigError, match="must cover every partition key"):
+        _with_templates(config_writer, {"region": {"case": "upper"}})
+
+
+def test_template_for_unknown_partition_key_is_rejected(config_writer):
+    with pytest.raises(ConfigError, match="not in partition_keys"):
+        _with_templates(
+            config_writer,
+            {
+                "dt": {"case": "none"},
+                "region": {"case": "upper"},
+                "country": {"case": "upper"},
+            },
+        )
+
+
+def test_unknown_template_field_and_case_are_rejected(config_writer):
+    with pytest.raises(ConfigError, match="unknown fields"):
+        _with_templates(
+            config_writer,
+            {
+                "dt": {"case": "none"},
+                "region": {"case": "upper", "trim": True},
+            },
+        )
+    with pytest.raises(ConfigError, match="case"):
+        _with_templates(
+            config_writer,
+            {"dt": {"case": "none"}, "region": {"case": "title"}},
+        )
+
+
+def test_alias_collision_with_another_canonical_key_is_rejected(config_writer):
+    # eu is aliased to both EU and EMEA canonical values.
+    with pytest.raises(ConfigError, match="already resolves"):
+        _with_templates(
+            config_writer,
+            {
+                "dt": {"case": "none"},
+                "region": {
+                    "case": "upper",
+                    "aliases": {"EU": ["emea"], "EMEA": ["eu"]},
+                },
+            },
+        )
+
+
+def test_duplicate_alias_spelling_within_one_key_is_rejected(config_writer):
+    with pytest.raises(ConfigError, match="already resolves"):
+        _with_templates(
+            config_writer,
+            {
+                "dt": {"case": "none"},
+                "region": {
+                    "case": "upper",
+                    "aliases": {"EU": ["emea"], "US": ["EMEA"]},
+                },
+            },
+        )
+
+
+def test_canonical_values_colliding_after_case_fold_are_rejected(config_writer):
+    with pytest.raises(ConfigError, match="collide after"):
+        _with_templates(
+            config_writer,
+            {
+                "dt": {"case": "none"},
+                "region": {
+                    "case": "lower",
+                    "aliases": {"eu": [], "EU": []},
+                },
+            },
+        )
+
+
+def test_alias_list_must_be_a_list(config_writer):
+    with pytest.raises(ConfigError, match="must be a list"):
+        _with_templates(
+            config_writer,
+            {
+                "dt": {"case": "none"},
+                "region": {"case": "upper", "aliases": {"EU": "emea"}},
+            },
+        )
+
+
+def test_alias_folding_to_its_own_canonical_is_allowed(config_writer):
+    # With case: upper, "eu" folds to the canonical EU: an explicit, redundant
+    # alias to the same target is valid rather than a self-collision.
+    config = _with_templates(
+        config_writer,
+        {
+            "dt": {"case": "none"},
+            "region": {"case": "upper", "aliases": {"EU": ["eu", "EMEA"]}},
+        },
+    )
+    scheme = config.sources[0].partition_scheme
+    assert scheme.normalize_value("region", "eu") == "EU"
+    assert scheme.normalize_value("region", "emea") == "EU"
+
+
+def test_identity_only_template_is_inactive_and_absent_from_digest(config_writer):
+    config = _with_templates(
+        config_writer, {"dt": {"case": "none"}, "region": {"case": "none"}}
+    )
+    assert config.sources[0].partition_scheme.active is False
+    semantic = config.semantic_dict()["sources"][0]
+    assert "partition_templates" not in semantic
+
+
+def test_templates_participate_in_semantic_config_digest(config_writer):
+    without = load_config(config_writer())
+    with_templates = _with_templates(
+        config_writer,
+        {"dt": {"case": "none"}, "region": {"case": "upper"}},
+    )
+    # Template-less sources keep their historical semantic shape exactly.
+    assert "partition_templates" not in without.semantic_dict()["sources"][0]
+    assert (
+        with_templates.semantic_dict()["sources"][0]["partition_templates"]
+        == {"region": {"case": "upper", "aliases": {}}}
+    )

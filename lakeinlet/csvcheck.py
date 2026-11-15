@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import BatchManifest, Finding, Record, SourceConfig
+from .partition import scheme_of
 from .timeutil import parse_utc
 
 _MAX_SAMPLES = 3
@@ -199,13 +200,24 @@ def inspect_csv(
                     )
                     event_time = None
 
+                # Compare partition identities after normalization: eu vs EU
+                # only counts as a mismatch when their canonical values differ.
+                row_raw_partition = {
+                    key: (row.get(key) or "").strip()
+                    for key in source.partition_keys
+                }
+                row_partition = scheme_of(source).normalize_partition(
+                    row_raw_partition
+                )
                 mismatched = {
                     key: {
                         "expected": manifest.partition.get(key),
-                        "actual": (row.get(key) or "").strip(),
+                        "actual": row_partition.get(key),
+                        "raw_actual": row_raw_partition.get(key),
+                        "raw_expected": manifest.raw_partition.get(key),
                     }
                     for key in source.partition_keys
-                    if (row.get(key) or "").strip() != manifest.partition.get(key)
+                    if row_partition.get(key) != manifest.partition.get(key)
                 }
                 if mismatched:
                     mismatch_count += 1
@@ -220,6 +232,8 @@ def inspect_csv(
                             event_time=event_time,
                             file_path=relative_path,
                             line_number=line,
+                            partition=dict(row_partition),
+                            raw_partition=dict(row_raw_partition),
                         )
                     )
         except csv.Error as exc:

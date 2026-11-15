@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from pathlib import Path
 from typing import Any
@@ -10,12 +11,14 @@ import yaml
 
 from .errors import ConfigError
 from .models import AuditConfig, SourceConfig
+from .partition import PartitionScheme
 from .timeutil import parse_utc
 
 _TOP_LEVEL_KEYS = {"project", "lake_root", "as_of", "sources", "schema_version"}
 _SOURCE_KEYS = {
     "name",
     "partition_keys",
+    "partition_templates",
     "allowed_lateness_seconds",
     "future_tolerance_seconds",
     "sequence_policy",
@@ -110,7 +113,7 @@ def _build_source(raw: Any, index: int) -> SourceConfig:
         if not isinstance(value, str) or not _NAME_RE.fullmatch(value):
             raise ConfigError(f"{label}.{key} must be an identifier string")
 
-    return SourceConfig(
+    source = SourceConfig(
         name=name,
         partition_keys=tuple(keys),
         allowed_lateness_seconds=allowed,
@@ -121,6 +124,10 @@ def _build_source(raw: Any, index: int) -> SourceConfig:
         event_time_field=event_field,
         record_id_field=record_field,
     )
+    # Static validation: templates must cover every partition key and alias
+    # spellings must not collide with each other or with canonical values.
+    scheme = PartitionScheme.build(source, item.get("partition_templates"))
+    return dataclasses.replace(source, partition_scheme=scheme)
 
 
 def load_config(path: str | Path) -> AuditConfig:

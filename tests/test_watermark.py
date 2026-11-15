@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from lakeinlet.models import BatchSummary, SourceConfig
+from lakeinlet.partition import PartitionScheme
 from lakeinlet.timeutil import parse_utc
 from lakeinlet.watermark import evaluate_watermarks
 
@@ -50,11 +52,19 @@ def test_future_batch_is_flagged_and_does_not_advance_watermark(broken_result):
     )
     assert future.batch_id == "orders-future"
     assert future.evidence["event_time_max"] == "2025-03-01T04:05:00Z"
-    watermark = _watermark(broken_result, "orders", "eu")
-    assert watermark.max_event_time == parse_utc("2025-03-01T01:10:00Z")
-    assert watermark.safe_watermark == parse_utc("2025-03-01T01:00:00Z")
+    # region is normalized to its canonical upper-case spelling.
+    watermark = _watermark(broken_result, "orders", "EU")
+    # The upper-case variant and collision EU batch join the same partition and
+    # advance its watermark; the future batch still does not contribute.
+    assert watermark.max_event_time == parse_utc("2025-03-01T02:02:00Z")
+    assert watermark.safe_watermark == parse_utc("2025-03-01T01:52:00Z")
     assert watermark.late_batch_count == 1
-    assert watermark.batch_count == 6
+    # All eu/EU/emea spellings merge into the one canonical EU partition:
+    # eight original/variant batches, excluding the separate US partition.
+    assert watermark.batch_count == 8
+    us = _watermark(broken_result, "orders", "US")
+    assert us.batch_count == 1
+    assert us.safe_watermark == parse_utc("2025-03-01T01:54:00Z")
 
 def test_late_boundary_is_inclusive_and_one_second_below_is_late():
     source = SourceConfig(
@@ -134,3 +144,100 @@ def test_future_declared_at_is_flagged():
     ]
     _, findings = evaluate_watermarks(summaries, {"s": source}, as_of)
     assert [finding.code for finding in findings] == ["FUTURE_DECLARED_AT"]
+
+
+def _case_variant_source() -> SourceConfig:
+    base = SourceConfig(
+        name="s",
+        partition_keys=("region",),
+        allowed_lateness_seconds=0,
+        future_tolerance_seconds=300,
+    )
+    return replace(
+        base,
+        partition_scheme=PartitionScheme.build(
+            base, {"region": {"case": "upper", "aliases": {"EU": ["emea"]}}}
+        ),
+    )
+
+
+def test_case_variant_partitions_share_one_watermark():
+    """eu, EU and emea spellings merge onto one canonical EU watermark."""
+    source = _case_variant_source()
+    as_of = parse_utc("2025-03-01T05:00:00Z")
+    summaries = [
+        BatchSummary(
+            "s", "b1", 1, {"region": "eu"},
+            parse_utc("2025-03-01T01:00:00Z"), "m1", 1, 1,
+            parse_utc("2025-03-01T00:50:00Z"),
+            parse_utc("2025-03-01T01:00:00Z"),
+        ),
+        BatchSummary(
+            "s", "b2", 2, {"region": "EU"},
+            parse_utc("2025-03-01T01:10:00Z"), "m2", 1, 1,
+            parse_utc("2025-03-01T01:05:00Z"),
+            parse_utc("2025-03-01T01:10:00Z"),
+        ),
+        BatchSummary(
+            "s", "b3", 3, {"region": "emea"},
+            parse_utc("2025-03-01T01:20:00Z"), "m3", 1, 1,
+            parse_utc("2025-03-01T01:15:00Z"),
+            parse_utc("2025-03-01T01:20:00Z"),
+        ),
+    ]
+    watermarks, findings = evaluate_watermarks(summaries, {"s": source}, as_of)
+    assert len(watermarks) == 1
+    assert watermarks[0].partition == {"region": "EU"}
+    assert watermarks[0].batch_count == 3
+    assert watermarks[0].max_event_time == parse_utc("2025-03-01T01:20:00Z")
+    assert findings == []
+
+
+def test_distinct_canonical_partitions_keep_separate_watermarks():
+    source = _case_variant_source()
+    as_of = parse_utc("2025-03-01T05:00:00Z")
+    summaries = [
+        BatchSummary(
+            "s", "b1", 1, {"region": "EU"},
+            parse_utc("2025-03-01T01:00:00Z"), "m1", 1, 1,
+            parse_utc("2025-03-01T01:00:00Z"),
+            parse_utc("2025-03-01T01:00:00Z"),
+        ),
+        BatchSummary(
+            "s", "b2", 2, {"region": "US"},
+            parse_utc("2025-03-01T01:10:00Z"), "m2", 1, 1,
+            parse_utc("2025-03-01T01:10:00Z"),
+            parse_utc("2025-03-01T01:10:00Z"),
+        ),
+    ]
+    watermarks, _ = evaluate_watermarks(summaries, {"s": source}, as_of)
+    assert {next(iter(wm.partition.items())) for wm in watermarks} == {
+        ("region", "EU"),
+        ("region", "US"),
+    }
+    assert all(wm.batch_count == 1 for wm in watermarks)
+
+
+def test_broken_fixture_merges_case_variants_into_one_watermark(broken_result):
+    """End-to-end: eu and EU manifests share the canonical EU watermark."""
+    eu = _watermark(broken_result, "orders", "EU")
+    assert eu.batch_count == 8
+    raw_spellings = {
+        batch.partition.get("region") for batch in broken_result.batches
+    }
+    # Reports only ever expose the canonical spelling.
+    assert raw_spellings == {"EU", "US"}
+
+
+def test_broken_fixture_watermark_advances_across_case_variant_batch(
+    broken_result,
+):
+    upper = next(
+        batch
+        for batch in broken_result.batches
+        if batch.batch_id == "orders-upper-region"
+    )
+    # It joins the EU watermark state rather than starting a new partition.
+    assert upper.watermark_before is not None
+    assert upper.partition == {"dt": "2025-03-01", "region": "EU"}
+    assert upper.late is False
