@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .errors import LedgerError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
@@ -70,8 +70,25 @@ CREATE TABLE IF NOT EXISTS batches (
     late INTEGER NOT NULL,
     UNIQUE(run_id, ordinal)
 );
+CREATE TABLE IF NOT EXISTS completion_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    plan_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    gap_range TEXT,
+    partition_label TEXT,
+    needs_manual_decision INTEGER NOT NULL,
+    uncertainty_reason TEXT,
+    candidate_count INTEGER NOT NULL,
+    chain_request_count INTEGER NOT NULL,
+    plan_json TEXT NOT NULL,
+    UNIQUE(run_id, plan_id)
+);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_runs_as_of ON runs(as_of, run_id);
+CREATE INDEX IF NOT EXISTS idx_completion_plans_source
+    ON completion_plans(source, plan_id);
 """
 
 
@@ -100,7 +117,7 @@ def require_schema(connection: sqlite3.Connection, path: Path) -> None:
     except sqlite3.Error as exc:
         connection.close()
         raise LedgerError(f"cannot inspect ledger {path}: {exc}") from exc
-    required = {"runs", "findings", "watermarks", "batches"}
+    required = {"runs", "findings", "watermarks", "batches", "completion_plans"}
     if version != SCHEMA_VERSION or not required.issubset(tables):
         connection.close()
         raise LedgerError(
@@ -121,7 +138,9 @@ def initialize_ledger(path: str | Path) -> Path:
         connection.execute("PRAGMA foreign_keys = ON")
         connection.executescript(_SCHEMA)
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, SCHEMA_VERSION):
+        # Version 0 = brand-new database; version 1 predates completion_plans
+        # and is upgraded in place by the CREATE TABLE IF NOT EXISTS above.
+        if version not in (0, 1, SCHEMA_VERSION):
             raise LedgerError(f"unsupported ledger schema version: {version}")
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()

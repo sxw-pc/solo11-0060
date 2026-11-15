@@ -29,14 +29,14 @@ manifest discovery (source manifest_dir + glob)
 file scanner ──► CSV parser ──► integrity and row findings
    │
    ├──► duplicates (batch / sequence / digest / record id)
-   ├──► sequence continuity + chain
+   ├──► sequence continuity + chain ──► completion plans
    └──► watermark engine (arrival order, late/future)
               │
               ▼
-        AuditResult (sorted findings, source summaries)
+        AuditResult (sorted findings, source summaries, completion plans)
           │        │             │
-          │        │             └──► SQLite ledger (idempotent by run_id)
-          │        └──► JSON / Markdown / inline-CSS HTML
+          │        │             └──► SQLite ledger (idempotent by run_id, stable plan ids)
+          │        └──► JSON / Markdown / inline-CSS HTML + completion_plans.json
           └──► CLI exit code
 ```
 
@@ -48,18 +48,18 @@ file scanner ──► CSV parser ──► integrity and row findings
 | --- | --- |
 | `cli.py` | 参数解析、退出码、报告与台账写出顺序 |
 | `config.py` | YAML 读取、字段白名单、UTC 校验、路径约束、source 策略归一化 |
-| `models.py` | 配置、manifest、扫描、发现项、批次、水位等强类型模型 |
+| `models.py` | 配置、manifest、扫描、发现项、批次、水位、补全计划等强类型模型 |
 | `audit_result.py` | 顶层结果、计数与稳定 JSON 序列化结构 |
 | `manifest.py` | 发现 manifest、安全解析、schema 与路径校验、逐文件错误降级 |
 | `scanner.py` | SHA-256、字节数、CSV 扫描聚合、行数/事件范围对比 |
 | `csvcheck.py` | 表头、必填列、行结构、UTC 事件时间、记录标识、分区一致性 |
 | `watermark.py` | 按声明到达顺序推进分区水位、迟到、未来事件、未来声明 |
 | `duplicates.py` | 批次 ID、source 序列、实际文件摘要、记录 ID 跨文件重复 |
-| `sequence.py` | `contiguous` 序列缺口、`prev_batch_id` 链存在性与前后关系 |
+| `sequence.py` | `contiguous` 序列缺口、`prev_batch_id` 链存在性与前后关系，并派生补全计划 |
 | `rules.py` | 编排、发现项去重排序、source 汇总、状态、内容寻址 run id |
 | `ledger_schema.py` | 台账 schema、初始化、只读连接与兼容性检查 |
 | `ledger.py` | 幂等写入与只读查询 |
-| `report_json.py` | 排序键 JSON、UTF-8、末尾换行 |
+| `report_json.py` | 排序键 JSON、UTF-8、末尾换行；独立补全计划文件 |
 | `report_md.py` | 稳定 Markdown 与证据附录 |
 | `report_html.py` | 转义所有动态值、内联本地 CSS、无脚本自包含页面 |
 | `server.py` | Flask 只读应用、回环地址白名单、安全响应头 |

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +11,12 @@ from typing import Any
 from .timeutil import format_utc
 
 SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2}
+
+#: prev_batch_id links are only valid between batches in one partition.
+CHAIN_RULE = (
+    "prev_batch_id 仅在同一分区内连续有效；跨分区不得接链，补齐缺口后应将 "
+    "prev_batch_id 重接到同分区内序列紧邻的前驱批次。"
+)
 
 def partition_label(partition: dict[str, str] | None) -> str:
     """Canonical, stable label for a partition mapping."""
@@ -291,3 +298,149 @@ class SourceSummary:
             "error_count": self.error_count,
             "warning_count": self.warning_count,
         }
+
+
+# ---------------------------------------------------------------------------
+# Completion plans
+#
+# A completion plan turns SEQUENCE_GAP / CHAIN_BROKEN / CHAIN_ORDER_INVALID
+# findings into actionable repair guidance: which missing sequence numbers to
+# re-ingest, which partition each candidate belongs to (or which partitions a
+# human must choose between), and how the prev_batch_id chain should be
+# rewired once the data is backfilled.
+# ---------------------------------------------------------------------------
+
+#: Basis code for a partition suggested from both surrounding manifests.
+PARTITION_BASIS_BOTH_NEIGHBORS = "both_neighbors"
+#: Basis code for a partition suggested from the only available neighbor.
+PARTITION_BASIS_SINGLE_NEIGHBOR = "single_neighbor"
+#: Basis code for an option inside a multi-candidate, human-decision plan.
+PARTITION_BASIS_AMBIGUOUS = "ambiguous_neighbors"
+
+
+@dataclass(slots=True, frozen=True)
+class PartitionOption:
+    """One suggested partition for a backfilled sequence candidate."""
+
+    partition: dict[str, str]
+    basis: str
+    needs_manual_decision: bool
+    uncertainty_reason: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "partition": dict(sorted(self.partition.items())),
+            "partition_label": partition_label(self.partition),
+            "basis": self.basis,
+            "needs_manual_decision": self.needs_manual_decision,
+            "uncertainty_reason": self.uncertainty_reason,
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class SequenceCandidate:
+    """One missing sequence number that needs to be re-ingested."""
+
+    sequence: int
+    prev_sequence: int | None
+    next_sequence: int | None
+    partition_options: tuple[PartitionOption, ...]
+    suggested_prev_batch_id: str | None
+    chain_note: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sequence": self.sequence,
+            "prev_sequence": self.prev_sequence,
+            "next_sequence": self.next_sequence,
+            "partition_options": [option.to_dict() for option in self.partition_options],
+            "suggested_prev_batch_id": self.suggested_prev_batch_id,
+            "chain_note": self.chain_note,
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class ChainRequest:
+    """Reusable prev_batch_id repair information for one broken chain link."""
+
+    finding_code: str
+    batch_id: str
+    declared_prev_batch_id: str | None
+    partition: dict[str, str]
+    manifest_path: str
+    sequence: int
+    suggested_prev_batch_id: str | None
+    note: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "finding_code": self.finding_code,
+            "batch_id": self.batch_id,
+            "declared_prev_batch_id": self.declared_prev_batch_id,
+            "partition": dict(sorted(self.partition.items())),
+            "partition_label": partition_label(self.partition),
+            "manifest_path": self.manifest_path,
+            "sequence": self.sequence,
+            "suggested_prev_batch_id": self.suggested_prev_batch_id,
+            "note": self.note,
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class CompletionPlan:
+    """Actionable backfill plan for one source / gap interval / partition."""
+
+    plan_id: str
+    source: str
+    gap_range: tuple[int, int] | None
+    partition: dict[str, str] | None
+    needs_manual_decision: bool
+    uncertainty_reason: str | None
+    candidates: tuple[SequenceCandidate, ...]
+    chain_requests: tuple[ChainRequest, ...]
+    chain_rule: str = CHAIN_RULE
+
+    @property
+    def partition_label(self) -> str:
+        return partition_label(self.partition)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "plan_id": self.plan_id,
+            "source": self.source,
+            "gap_range": list(self.gap_range) if self.gap_range is not None else None,
+            "partition": (
+                dict(sorted(self.partition.items())) if self.partition else None
+            ),
+            "partition_label": self.partition_label,
+            "needs_manual_decision": self.needs_manual_decision,
+            "uncertainty_reason": self.uncertainty_reason,
+            "candidates": [candidate.to_dict() for candidate in self.candidates],
+            "chain_requests": [request.to_dict() for request in self.chain_requests],
+            "chain_rule": self.chain_rule,
+        }
+
+
+def build_plan_id(
+    source: str,
+    gap_range: tuple[int, int] | None,
+    partition_identity: str,
+) -> str:
+    """Derive the stable, replay-safe identity of a completion plan.
+
+    The identity is fully determined by the source, the gap interval, and the
+    partition (or the sorted set of candidate partition labels when the
+    partition itself is ambiguous). Re-auditing identical inputs therefore
+    refreshes the same plan id instead of appending new history.
+    """
+    digest = hashlib.sha256()
+    digest.update(source.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(
+        ("*" if gap_range is None else f"{gap_range[0]}:{gap_range[1]}").encode(
+            "utf-8"
+        )
+    )
+    digest.update(b"\0")
+    digest.update(partition_identity.encode("utf-8"))
+    return "plan-" + digest.hexdigest()[:12]

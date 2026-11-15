@@ -16,10 +16,12 @@ AuditConfig 1 ── * SourceConfig
                         ├── SourceSummary[]
                         ├── BatchSummary[]
                         ├── Watermark[]
-                        └── Finding[]
+                        ├── Finding[]
+                        └── CompletionPlan[]
                                         │
                                         ▼
-                         report.{json,md,html} + ledger.sqlite
+                         report.{json,md,html} + completion_plans.json
+                                        + ledger.sqlite
 ```
 
 `source + partition` 是水位的唯一状态键；`source` 也是记录标识重复检查的作用域。
@@ -131,6 +133,26 @@ batch_count, late_batch_count
 
 分区标签规范化为 `key=value`，多个键按字母序并以逗号连接，例如 `dt=2025-03-01,region=eu`。
 
+`CompletionPlan` 是建立在 `SEQUENCE_GAP` / `CHAIN_BROKEN` / `CHAIN_ORDER_INVALID` 之上的可操作补全层，不改变发现项本身：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `plan_id` | `plan-` + 12 位十六进制 | 由 `source`、缺口区间、分区身份共同哈希决定，重放稳定 |
+| `source` | 字符串 | 产生缺口/断链的数据源 |
+| `gap_range` | `[low, high]` 或 null | 计划覆盖的连续缺失区间；仅链修复计划为 null |
+| `partition` | 映射或 null | 单一确定分区；多候选人工决策时为 null |
+| `needs_manual_decision` | 布尔 | 相邻 manifest 分区键值不一致时为 true |
+| `uncertainty_reason` | 字符串或 null | 需要人工决策/确认的具体原因 |
+| `candidates` | 列表 | 区间内每个缺失 sequence 一条补全候选 |
+| `chain_requests` | 列表 | 可复用的 `prev_batch_id` 链修复信息 |
+| `chain_rule` | 字符串 | 链规则常量：`prev_batch_id` 仅同分区连续有效 |
+
+`candidates[]` 字段：`sequence`, `prev_sequence`, `next_sequence`, `partition_options[]`, `suggested_prev_batch_id`, `chain_note`。`partition_options[]` 含 `partition`, `partition_label`, `basis`（`both_neighbors` / `single_neighbor` / `ambiguous_neighbors`）, `needs_manual_decision`, `uncertainty_reason`。
+
+分区不是固定值：缺口前后相邻 manifest 的分区键值一致时才照抄（两侧都在为 `both_neighbors`，仅一侧存在为 `single_neighbor` 且仍提示人工确认）；键值不一致时升级为多候选，每个候选分区都标记 `needs_manual_decision=true` 并写明不确定原因，且不给出 `suggested_prev_batch_id`。链建议只引用同分区内序列紧邻的低序列批次，跨分区永不接链；同分区没有更低批次时建议值为 null 并注明该候选是链头。
+
+`chain_requests[]` 字段：`finding_code`, `batch_id`, `declared_prev_batch_id`, `partition`, `partition_label`, `manifest_path`, `sequence`, `suggested_prev_batch_id`, `note`。
+
 ## 6. 报告 JSON
 
 `schema_version` 为字符串 `"1.0"`。顶层结构：
@@ -156,7 +178,8 @@ batch_count, late_batch_count
   "sources": [],
   "watermarks": [],
   "batches": [],
-  "findings": []
+  "findings": [],
+  "completion_plans": []
 }
 ```
 
@@ -173,9 +196,11 @@ batch_count, late_batch_count
 
 `findings[]` 字段：`severity`, `code`, `source`, `partition`, `batch_id`, `message`, `evidence`。
 
+`completion_plans[]` 字段见上一节 `CompletionPlan`。同一份补全计划还会独立写到输出目录的 `completion_plans.json`（顶层含 `schema_version`、`project`、`as_of`、`run_id`、`plan_count` 与 `completion_plans`），无计划时该文件仍会写出且 `plan_count` 为 0，便于脚本固定消费。
+
 ## 7. SQLite 台账
 
-数据库 `PRAGMA user_version = 1`，四张表：
+数据库 `PRAGMA user_version = 2`，五张表。版本 1（补全计划出现之前）的台账在只读模式下会被拒绝并提示重新生成；下一次审计写入时 `initialize_ledger` 通过 `CREATE TABLE IF NOT EXISTS` 原地升级到版本 2，历史 `runs`/`findings`/`watermarks`/`batches` 数据保留。
 
 ### `runs`
 
@@ -195,4 +220,8 @@ batch_count, late_batch_count
 
 `run_id`, `ordinal`, `manifest_path`, `source`, `batch_id`, `sequence`, `partition_label`, `declared_at`, `file_count`, `record_count`, `event_time_min`, `event_time_max`, `watermark_before`, `watermark_after`, `late`（0/1）。`(run_id, ordinal)` 唯一。
 
-写入以 `run_id` 幂等：先删除该运行的三类子表记录，再 upsert `runs` 并插入子记录，整个过程处于一个事务中。读取使用 SQLite `mode=ro` 和 `PRAGMA query_only=ON`。除上述审计元数据外，不复制原始 CSV 内容到台账。
+### `completion_plans`
+
+`id` 自增主键；`run_id` 外键；`ordinal`；`plan_id`（`plan-` 前缀的稳定身份）；`source`；`gap_range`（文本 `low:high`，仅链修复计划为 NULL）；`partition_label`（多候选计划为 NULL）；`needs_manual_decision`（0/1）；`uncertainty_reason`；`candidate_count`；`chain_request_count`；`plan_json`（排序键、紧凑分隔符的完整计划 JSON）。`(run_id, plan_id)` 唯一，并在 `(source, plan_id)` 上建有索引，便于跨运行查询同一 source 的计划历史。
+
+写入以 `run_id` 幂等：先删除该运行的四类子表记录，再 upsert `runs` 并插入子记录，整个过程处于一个事务中。读取使用 SQLite `mode=ro` 和 `PRAGMA query_only=ON`。除上述审计元数据外，不复制原始 CSV 内容到台账。`plan_id` 由 `source`、缺口区间与分区身份内容寻址，重跑相同输入会刷新同一 `plan_id` 的行而不是无限追加；`read_completion_plan_ids(ledger, source)` 返回该 source 跨运行的计划编号历史，可用于判断再次审计到的缺口是否已有计划（即是否已补齐修复）。

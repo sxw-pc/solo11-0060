@@ -42,6 +42,9 @@ def write_run(
                 "DELETE FROM watermarks WHERE run_id = ?", (result.run_id,)
             )
             connection.execute("DELETE FROM batches WHERE run_id = ?", (result.run_id,))
+            connection.execute(
+                "DELETE FROM completion_plans WHERE run_id = ?", (result.run_id,)
+            )
             summary = result.summary_dict()
             connection.execute(
                 """
@@ -162,6 +165,41 @@ def write_run(
                         1 if batch.late else 0,
                     ),
                 )
+            for ordinal, plan in enumerate(result.completion_plans, start=1):
+                payload = plan.to_dict()
+                gap_range = (
+                    f"{plan.gap_range[0]}:{plan.gap_range[1]}"
+                    if plan.gap_range is not None
+                    else None
+                )
+                connection.execute(
+                    """
+                    INSERT INTO completion_plans (
+                        run_id, ordinal, plan_id, source, gap_range,
+                        partition_label, needs_manual_decision,
+                        uncertainty_reason, candidate_count,
+                        chain_request_count, plan_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        result.run_id,
+                        ordinal,
+                        plan.plan_id,
+                        plan.source,
+                        gap_range,
+                        plan.partition_label or None,
+                        1 if plan.needs_manual_decision else 0,
+                        plan.uncertainty_reason,
+                        len(plan.candidates),
+                        len(plan.chain_requests),
+                        json.dumps(
+                            payload,
+                            sort_keys=True,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    ),
+                )
     except sqlite3.Error as exc:
         raise LedgerError(f"cannot write ledger: {exc}") from exc
     finally:
@@ -218,6 +256,13 @@ def read_run(path: str | Path, run_id: str) -> dict[str, Any] | None:
             item["late"] = bool(item["late"])
             batches.append(item)
         result["batches"] = batches
+        result["completion_plans"] = [
+            _with_plan_payload(dict(row))
+            for row in connection.execute(
+                "SELECT * FROM completion_plans WHERE run_id = ? ORDER BY ordinal",
+                (run_id,),
+            )
+        ]
         return result
     except sqlite3.Error as exc:
         raise LedgerError(f"cannot read ledger run: {exc}") from exc
@@ -232,3 +277,44 @@ def _with_evidence(row: dict[str, Any]) -> dict[str, Any]:
         row["evidence"] = {}
         row.pop("evidence_json", None)
     return row
+
+
+def _with_plan_payload(row: dict[str, Any]) -> dict[str, Any]:
+    try:
+        row["plan"] = json.loads(row.pop("plan_json"))
+    except (TypeError, json.JSONDecodeError):
+        row["plan"] = {}
+        row.pop("plan_json", None)
+    row["needs_manual_decision"] = bool(row["needs_manual_decision"])
+    return row
+
+
+def read_completion_plan_ids(path: str | Path, source: str) -> list[dict[str, Any]]:
+    """Return recorded plan ids for one source across all audit runs.
+
+    Plan ids are content-addressed from (source, gap interval, partition), so
+    the same backfill gap refreshes the same row on every re-audit instead of
+    appending duplicates; callers can use this history to tell whether a gap
+    seen in the current run was already planned (and possibly repaired).
+    """
+    ledger_path = Path(path).expanduser().resolve()
+    connection = readonly_connection(ledger_path)
+    try:
+        rows = connection.execute(
+            """
+            SELECT cp.plan_id, cp.source, cp.gap_range, cp.partition_label,
+                   cp.needs_manual_decision, cp.uncertainty_reason,
+                   cp.candidate_count, cp.chain_request_count,
+                   r.run_id, r.as_of
+            FROM completion_plans cp
+            JOIN runs r ON r.run_id = cp.run_id
+            WHERE cp.source = ?
+            ORDER BY cp.plan_id, r.as_of DESC
+            """,
+            (source,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    except sqlite3.Error as exc:
+        raise LedgerError(f"cannot read completion plans: {exc}") from exc
+    finally:
+        connection.close()

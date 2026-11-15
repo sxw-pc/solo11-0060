@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from .models import BatchSummary, Finding, SourceSummary, Watermark
+from .models import BatchSummary, CompletionPlan, Finding, SourceSummary, Watermark
 from .timeutil import format_utc
 
 
@@ -24,6 +24,7 @@ class AuditResult:
     config_digest: str
     run_id: str = ""
     status: str = "passed"
+    completion_plans: tuple[CompletionPlan, ...] = ()
 
     @property
     def error_count(self) -> int:
@@ -66,4 +67,5 @@ class AuditResult:
             "watermarks": [watermark.to_dict() for watermark in self.watermarks],
             "batches": [batch.to_dict() for batch in self.batches],
             "findings": [finding.to_dict() for finding in self.findings],
+            "completion_plans": [plan.to_dict() for plan in self.completion_plans],
         }

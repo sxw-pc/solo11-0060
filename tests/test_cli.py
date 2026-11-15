@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 from lakeinlet.cli import main
 from lakeinlet.config import load_config
+from lakeinlet.ledger import read_completion_plan_ids
 
 def test_audit_command_writes_reports_and_ledger(tmp_path, demo_config, capsys):
     out = tmp_path / "audit-out"
@@ -19,9 +22,50 @@ def test_audit_command_writes_reports_and_ledger(tmp_path, demo_config, capsys):
     assert "status: passed" in captured.out
     assert "findings: 0" in captured.out
     assert (out / "report.json").is_file()
+    assert (out / "completion_plans.json").is_file()
     assert (out / "report.md").is_file()
     assert (out / "report.html").is_file()
     assert (out / "ledger.sqlite").is_file()
+
+
+def test_broken_audit_writes_completion_plan_file(tmp_path, broken_config, capsys):
+    out = tmp_path / "broken-plans"
+    code = main(
+        [
+            "audit",
+            "--config",
+            str(broken_config.config_path),
+            "--out",
+            str(out),
+            "--fail-on",
+            "never",
+        ]
+    )
+    assert code == 0
+    payload = json.loads((out / "completion_plans.json").read_text(encoding="utf-8"))
+    assert payload["plan_count"] >= 1
+    plan_ids = [plan["plan_id"] for plan in payload["completion_plans"]]
+
+    # Re-running the audit refreshes the same plan ids (no history growth).
+    main(
+        [
+            "audit",
+            "--config",
+            str(broken_config.config_path),
+            "--out",
+            str(out),
+            "--fail-on",
+            "never",
+            "--quiet",
+        ]
+    )
+    replayed = json.loads(
+        (out / "completion_plans.json").read_text(encoding="utf-8")
+    )
+    assert [plan["plan_id"] for plan in replayed["completion_plans"]] == plan_ids
+
+    history = read_completion_plan_ids(out / "ledger.sqlite", "orders")
+    assert {row["plan_id"] for row in history} == set(plan_ids)
 
 def test_broken_audit_exits_one_by_default(tmp_path, broken_config, capsys):
     code = main(

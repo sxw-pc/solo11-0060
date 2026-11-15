@@ -104,6 +104,8 @@ manifest 解析失败只丢弃该 manifest，其他 manifest、文件和数据�
 
 序列检查以 source 为作用域；`gapped` 仅关闭 `SEQUENCE_GAP`，不关闭链检查。缺口证据最多列出前 100 个缺失值，并标记 `samples_truncated`。
 
+这三类发现项会额外派生**补全计划**（`completion_plans`，见 [DATA_MODEL.md](DATA_MODEL.md)）：逐个列出缺口区间内的候选 sequence、基于前后相邻 manifest 的建议分区（相邻分区键值不一致时升级为多候选人工决策），以及可复用的 `prev_batch_id` 链信息。计划编号由 source、缺口区间与分区内容寻址，重跑审计刷新同一编号；计划同时进入 `report.json`、独立的 `completion_plans.json` 和 SQLite 台账。
+
 ## 4. 证据字段
 
 所有发现项都包含非空 `evidence`。常用字段：

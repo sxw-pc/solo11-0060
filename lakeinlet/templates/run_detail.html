@@ -91,6 +91,33 @@
     <div class="empty">没有有效批次。</div>
     {% endif %}
 
+    <h2>补全计划</h2>
+    {% if run.completion_plans %}
+      {% for entry in run.completion_plans %}
+      {% set plan = entry.plan %}
+      <details class="finding" open>
+        <summary>
+          <span class="severity severity-{{ 'error' if entry.needs_manual_decision else 'info' }}">
+            {{ '人工决策' if entry.needs_manual_decision else '可执行' }}
+          </span>
+          <code>{{ entry.plan_id }}</code>
+          — source {{ entry.source }} · 缺口区间
+          {{ entry.gap_range or '无（仅链修复）' }} · 分区 {{ entry.partition_label or '多候选' }}
+        </summary>
+        <div class="meta">
+          <span>候选 sequence 数: {{ entry.candidate_count }}</span>
+          <span>链修复请求: {{ entry.chain_request_count }}</span>
+        </div>
+        {% if entry.uncertainty_reason %}
+        <p><strong>不确定原因：</strong>{{ entry.uncertainty_reason }}</p>
+        {% endif %}
+        <pre class="mono">{{ plan | tojson(indent=2) }}</pre>
+      </details>
+      {% endfor %}
+    {% else %}
+    <div class="empty">无需补全计划。</div>
+    {% endif %}
+
     <h2>发现项</h2>
     {% if run.findings %}
       {% for finding in run.findings %}

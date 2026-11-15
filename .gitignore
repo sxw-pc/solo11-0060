@@ -24,3 +24,5 @@ node_modules/
 *.pyc
 .env
 dist/
+*.egg-info/
+build/

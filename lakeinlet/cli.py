@@ -11,7 +11,11 @@ from .config import load_config
 from .errors import LakeInletError
 from .ledger import write_run
 from .report_html import write_report_html
-from .report_json import write_report_json
+from .report_json import (
+    COMPLETION_PLANS_FILENAME,
+    write_completion_plans,
+    write_report_json,
+)
 from .report_md import write_report_markdown
 from .rules import run_audit
 from .server import serve_viewer
@@ -68,9 +72,11 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     report_json = out_dir / "report.json"
     report_md = out_dir / "report.md"
     report_html = out_dir / "report.html"
+    completion_plans_path = out_dir / COMPLETION_PLANS_FILENAME
 
     result = run_audit(config)
     write_report_json(result, report_json)
+    write_completion_plans(result, completion_plans_path)
     write_report_markdown(result, report_md)
     write_report_html(result, report_html)
     write_run(
@@ -98,6 +104,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
             f"info={result.info_count})"
         )
         print(f"json_report: {report_json}")
+        print(f"completion_plans: {completion_plans_path} ({len(result.completion_plans)} plan(s))")
         print(f"markdown_report: {report_md}")
         print(f"html_report: {report_html}")
         print(f"ledger: {ledger_path}")

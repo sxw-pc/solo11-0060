@@ -5,7 +5,13 @@ import json
 
 from lakeinlet.models import Finding
 from lakeinlet.report_html import render_html, write_report_html
-from lakeinlet.report_json import render_json, write_report_json
+from lakeinlet.report_json import (
+    COMPLETION_PLANS_FILENAME,
+    render_completion_plans,
+    render_json,
+    write_completion_plans,
+    write_report_json,
+)
 from lakeinlet.report_md import render_markdown, write_report_markdown
 from lakeinlet.rules import run_audit
 
@@ -98,3 +104,52 @@ def test_broken_json_report_lists_expected_findings(broken_result):
         "FILE_CHECKSUM_MISMATCH",
     }.issubset(codes)
     assert all(item["evidence"] for item in payload["findings"])
+
+
+def test_json_report_embeds_completion_plans(broken_result):
+    payload = json.loads(render_json(broken_result))
+    assert "completion_plans" in payload
+    plans = payload["completion_plans"]
+    assert len(plans) == 1
+    plan = plans[0]
+    assert plan["plan_id"].startswith("plan-")
+    assert plan["source"] == "orders"
+    assert plan["gap_range"] == [2, 2]
+    assert plan["partition"]["region"] == "eu"
+    assert plan["candidates"][0]["sequence"] == 2
+    assert plan["chain_requests"][0]["finding_code"] == "CHAIN_BROKEN"
+    assert "prev_batch_id" in plan["chain_rule"]
+
+
+def test_clean_report_carries_empty_completion_plans(demo_result):
+    payload = json.loads(render_json(demo_result))
+    assert payload["completion_plans"] == []
+
+
+def test_standalone_completion_plan_file_is_stable(tmp_path, broken_result):
+    first = render_completion_plans(broken_result)
+    second = render_completion_plans(broken_result)
+    assert first == second and first.endswith("\n")
+
+    payload = json.loads(first)
+    assert payload["schema_version"] == "1.0"
+    assert payload["plan_count"] == 1
+    assert payload["run_id"] == broken_result.run_id
+    assert payload["completion_plans"][0]["plan_id"] == (
+        broken_result.completion_plans[0].plan_id
+    )
+
+    destination = write_completion_plans(
+        broken_result, tmp_path / COMPLETION_PLANS_FILENAME
+    )
+    assert destination.name == "completion_plans.json"
+    assert destination.read_text(encoding="utf-8") == first
+
+
+def test_completion_plan_ids_survive_replay(broken_config):
+    first = run_audit(broken_config)
+    second = run_audit(broken_config)
+    first_ids = [plan.plan_id for plan in first.completion_plans]
+    second_ids = [plan.plan_id for plan in second.completion_plans]
+    assert first_ids == second_ids and first_ids
+    assert first.run_id == second.run_id

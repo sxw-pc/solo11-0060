@@ -88,13 +88,14 @@ python -m lakeinlet serve --ledger LEDGER --host 127.0.0.1 --port 8088
 
 ```text
 out/demo/
-├── report.json       # 稳定 JSON，排序键、统一时间格式
-├── report.md         # Markdown 报告，包含发现项证据
-├── report.html       # 自包含 HTML，内联 CSS，无脚本和远程资源
-└── ledger.sqlite     # SQLite 审计台账
+├── report.json            # 稳定 JSON，排序键、统一时间格式
+├── completion_plans.json  # 缺口/断链补全计划（无计划时仍写出空列表）
+├── report.md              # Markdown 报告，包含发现项证据
+├── report.html            # 自包含 HTML，内联 CSS，无脚本和远程资源
+└── ledger.sqlite          # SQLite 审计台账（含计划编号历史）
 ```
 
-报告不包含真实当前时间；所有时间判断以配置中的 `as_of` 为锚点。相同输入重复审计会得到相同 `run_id`、相同发现项顺序和字节级稳定的报告。台账对同一 `run_id` 做幂等替换，而不是无限追加重复运行。
+报告不包含真实当前时间；所有时间判断以配置中的 `as_of` 为锚点。相同输入重复审计会得到相同 `run_id`、相同发现项顺序和字节级稳定的报告。台账对同一 `run_id` 做幂等替换，而不是无限追加重复运行。补全计划编号由 source、缺口区间与分区内容寻址，重跑相同输入刷新同一编号，可据此判断同一 source 的缺口是否已补齐修复。
 
 ### 水位定义
 
@@ -187,7 +188,7 @@ lakeinlet/
 ├── csvcheck.py         # CSV 表头、字段、行、分区检查
 ├── watermark.py        # 水位推进、迟到、未来时间
 ├── duplicates.py       # 批次/序列/文件摘要/记录标识幂等检查
-├── sequence.py         # 序列缺口与 manifest 链检查
+├── sequence.py         # 序列缺口与 manifest 链检查、补全计划派生
 ├── rules.py            # 审计编排、状态、内容寻址 run_id
 ├── ledger.py           # SQLite 写入与只读查询
 ├── ledger_schema.py    # 台账 schema 与只读连接

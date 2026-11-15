@@ -12,11 +12,12 @@ from .manifest import load_source_manifests
 from .models import (
     AuditConfig,
     BatchScan,
+    CompletionPlan,
     Finding,
     SourceSummary,
 )
 from .scanner import scan_batch
-from .sequence import find_sequence_findings
+from .sequence import analyze_sequences
 from .watermark import evaluate_watermarks, summarize_batches
 
 
@@ -121,10 +122,13 @@ def run_audit(config: AuditConfig) -> AuditResult:
             findings.extend(scan.issues)
 
     findings.extend(find_duplicate_findings(scans))
+    completion_plans: list[CompletionPlan] = []
     for source in config.sources:
-        findings.extend(
-            find_sequence_findings(manifests_by_source[source.name], source)
+        sequence_findings, source_plans = analyze_sequences(
+            manifests_by_source[source.name], source
         )
+        findings.extend(sequence_findings)
+        completion_plans.extend(source_plans)
 
     summaries = summarize_batches(scans)
     watermarks, watermark_findings = evaluate_watermarks(
@@ -132,6 +136,15 @@ def run_audit(config: AuditConfig) -> AuditResult:
     )
     findings.extend(watermark_findings)
     findings = _dedupe_findings(findings)
+    completion_plans.sort(
+        key=lambda plan: (
+            plan.source,
+            plan.gap_range[0] if plan.gap_range is not None else 10**12,
+            plan.gap_range[1] if plan.gap_range is not None else 10**12,
+            plan.partition_label,
+            plan.plan_id,
+        )
+    )
 
     source_summaries = _source_summaries(config, scans, findings)
     result = AuditResult(
@@ -146,6 +159,7 @@ def run_audit(config: AuditConfig) -> AuditResult:
         record_count=sum(scan.record_count for scan in scans),
         config_digest="",
         status=_status(findings),
+        completion_plans=tuple(completion_plans),
     )
     run_id, config_digest = _fingerprint(result, config, scans)
     result.config_digest = config_digest
