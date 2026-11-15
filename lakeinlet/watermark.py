@@ -47,6 +47,7 @@ def summarize_batches(scans: Sequence[BatchScan]) -> list[BatchSummary]:
             record_count=scan.record_count,
             event_time_min=scan.event_time_min,
             event_time_max=scan.event_time_max,
+            prev_batch_id=scan.manifest.prev_batch_id,
         )
         for scan in ordered
     ]

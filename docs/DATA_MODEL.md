@@ -105,8 +105,16 @@ AuditConfig 1 ── * SourceConfig
 ```text
 source, batch_id, sequence, partition, declared_at, manifest_path,
 file_count, record_count, event_time_min, event_time_max,
-watermark_before, watermark_after, late
+watermark_before, watermark_after, late,
+prev_batch_id, inherited_late, inherited_root_kind,
+inherited_root_batch_id, inherited_path
 ```
+
+其中 `late` 仍是按 `source + partition` 独立判定的迟到结论；`inherited_*`
+字段是依赖传播结果：`inherited_root_kind` 为 `late`（根因是迟到批次）或
+`missing`（根因是缺失前驱），`inherited_path` 是从根因批次到本批的
+`batch_id` 链（根因在前，缺失前驱以声明的 ID 占位）。未被拖累的批次
+`inherited_late` 为 `false`，路径为空。
 
 `Watermark`：
 
@@ -169,7 +177,7 @@ batch_count, late_batch_count
 
 `watermarks[]` 字段：`source`, `partition`, `max_event_time`, `safe_watermark`, `batch_count`, `late_batch_count`。
 
-`batches[]` 字段：`source`, `batch_id`, `sequence`, `partition`, `declared_at`, `manifest_path`, `file_count`, `record_count`, `event_time_min`, `event_time_max`, `watermark_before`, `watermark_after`, `late`。
+`batches[]` 字段：`source`, `batch_id`, `sequence`, `partition`, `declared_at`, `manifest_path`, `file_count`, `record_count`, `event_time_min`, `event_time_max`, `watermark_before`, `watermark_after`, `late`, `prev_batch_id`, `inherited_late`, `inherited_root_kind`, `inherited_root_batch_id`, `inherited_path`。
 
 `findings[]` 字段：`severity`, `code`, `source`, `partition`, `batch_id`, `message`, `evidence`。
 
@@ -193,6 +201,8 @@ batch_count, late_batch_count
 
 ### `batches`
 
-`run_id`, `ordinal`, `manifest_path`, `source`, `batch_id`, `sequence`, `partition_label`, `declared_at`, `file_count`, `record_count`, `event_time_min`, `event_time_max`, `watermark_before`, `watermark_after`, `late`（0/1）。`(run_id, ordinal)` 唯一。
+`run_id`, `ordinal`, `manifest_path`, `source`, `batch_id`, `sequence`, `partition_label`, `declared_at`, `file_count`, `record_count`, `event_time_min`, `event_time_max`, `watermark_before`, `watermark_after`, `late`（0/1）, `prev_batch_id`, `inherited_late`（0/1）, `inherited_root_kind`, `inherited_root_batch_id`, `inherited_path_json`（紧凑 JSON 数组）。`(run_id, ordinal)` 唯一。
+
+`prev_batch_id` 与 `inherited_*` 列是 schema 初版之后追加的：新库由建表语句直接包含，旧库在写入时通过幂等的 `ALTER TABLE` 就地补齐，`user_version` 保持为 1。
 
 写入以 `run_id` 幂等：先删除该运行的三类子表记录，再 upsert `runs` 并插入子记录，整个过程处于一个事务中。读取使用 SQLite `mode=ro` 和 `PRAGMA query_only=ON`。除上述审计元数据外，不复制原始 CSV 内容到台账。

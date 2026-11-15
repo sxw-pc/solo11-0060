@@ -18,6 +18,12 @@ def _cell(value: Any) -> str:
     return " ".join(text.split())
 
 
+def _inherited_label(batch: Any) -> str:
+    if not batch.inherited_late:
+        return "no"
+    return f"yes ({batch.inherited_root_kind}: {batch.inherited_root_batch_id})"
+
+
 def _finding_markdown(index: int, finding: Finding) -> str:
     partition = finding.partition_label or "—"
     lines = [
@@ -135,8 +141,8 @@ def render_markdown(result: AuditResult) -> str:
             "",
             "## 批次",
             "",
-            "| 数据源 | batch_id | 序列 | 分区 | 声明时间 | 事件时间范围 | 记录 | 迟到 |",
-            "| --- | --- | ---: | --- | --- | --- | ---: | --- |",
+            "| 数据源 | batch_id | 序列 | 分区 | 声明时间 | 事件时间范围 | 记录 | 迟到 | 继承延迟 |",
+            "| --- | --- | ---: | --- | --- | --- | ---: | --- | --- |",
         ]
     )
     for batch in result.batches:
@@ -158,12 +164,13 @@ def render_markdown(result: AuditResult) -> str:
                     _cell(event_range),
                     str(batch.record_count),
                     "yes" if batch.late else "no",
+                    _cell(_inherited_label(batch)),
                 ]
             )
             + " |"
         )
     if not result.batches:
-        lines.append("| — | 无有效批次 | 0 | — | — | — | 0 | no |")
+        lines.append("| — | 无有效批次 | 0 | — | — | — | 0 | no | no |")
 
     lines.extend(["", "## 发现项", ""])
     if not result.findings:

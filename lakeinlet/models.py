@@ -228,6 +228,11 @@ class BatchSummary:
     watermark_before: datetime | None = None
     watermark_after: datetime | None = None
     late: bool = False
+    prev_batch_id: str | None = None
+    inherited_late: bool = False
+    inherited_root_kind: str | None = None
+    inherited_root_batch_id: str | None = None
+    inherited_path: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -244,6 +249,11 @@ class BatchSummary:
             "watermark_before": _iso(self.watermark_before),
             "watermark_after": _iso(self.watermark_after),
             "late": self.late,
+            "prev_batch_id": self.prev_batch_id,
+            "inherited_late": self.inherited_late,
+            "inherited_root_kind": self.inherited_root_kind,
+            "inherited_root_batch_id": self.inherited_root_batch_id,
+            "inherited_path": list(self.inherited_path),
         }
 
 @dataclass(slots=True, frozen=True)

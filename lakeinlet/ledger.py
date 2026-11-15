@@ -141,8 +141,10 @@ def write_run(
                         run_id, ordinal, manifest_path, source, batch_id,
                         sequence, partition_label, declared_at, file_count,
                         record_count, event_time_min, event_time_max,
-                        watermark_before, watermark_after, late
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        watermark_before, watermark_after, late,
+                        prev_batch_id, inherited_late, inherited_root_kind,
+                        inherited_root_batch_id, inherited_path_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         result.run_id,
@@ -160,6 +162,15 @@ def write_run(
                         payload["watermark_before"],
                         payload["watermark_after"],
                         1 if batch.late else 0,
+                        batch.prev_batch_id,
+                        1 if batch.inherited_late else 0,
+                        batch.inherited_root_kind,
+                        batch.inherited_root_batch_id,
+                        json.dumps(
+                            list(batch.inherited_path),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
                     ),
                 )
     except sqlite3.Error as exc:
@@ -216,6 +227,13 @@ def read_run(path: str | Path, run_id: str) -> dict[str, Any] | None:
         ):
             item = dict(row)
             item["late"] = bool(item["late"])
+            item["inherited_late"] = bool(item.get("inherited_late") or 0)
+            try:
+                item["inherited_path"] = json.loads(
+                    item.pop("inherited_path_json", None) or "[]"
+                )
+            except json.JSONDecodeError:
+                item["inherited_path"] = []
             batches.append(item)
         result["batches"] = batches
         return result

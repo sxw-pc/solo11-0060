@@ -68,11 +68,37 @@ CREATE TABLE IF NOT EXISTS batches (
     watermark_before TEXT,
     watermark_after TEXT,
     late INTEGER NOT NULL,
+    prev_batch_id TEXT,
+    inherited_late INTEGER NOT NULL DEFAULT 0,
+    inherited_root_kind TEXT,
+    inherited_root_batch_id TEXT,
+    inherited_path_json TEXT NOT NULL DEFAULT '[]',
     UNIQUE(run_id, ordinal)
 );
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_runs_as_of ON runs(as_of, run_id);
 """
+
+# Columns added to the batches table after the initial schema. Fresh
+# databases get them from _SCHEMA; existing databases are upgraded in place
+# so the schema version stays stable.
+_BATCH_TABLE_MIGRATIONS: tuple[tuple[str, str], ...] = (
+    ("prev_batch_id", "prev_batch_id TEXT"),
+    ("inherited_late", "inherited_late INTEGER NOT NULL DEFAULT 0"),
+    ("inherited_root_kind", "inherited_root_kind TEXT"),
+    ("inherited_root_batch_id", "inherited_root_batch_id TEXT"),
+    ("inherited_path_json", "inherited_path_json TEXT NOT NULL DEFAULT '[]'"),
+)
+
+
+def _migrate_batches(connection: sqlite3.Connection) -> None:
+    """Idempotently add post-v1 batches columns to an existing ledger."""
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(batches)")
+    }
+    for name, definition in _BATCH_TABLE_MIGRATIONS:
+        if name not in columns:
+            connection.execute(f"ALTER TABLE batches ADD COLUMN {definition}")
 
 
 def readonly_connection(path: Path) -> sqlite3.Connection:
@@ -123,6 +149,7 @@ def initialize_ledger(path: str | Path) -> Path:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if version not in (0, SCHEMA_VERSION):
             raise LedgerError(f"unsupported ledger schema version: {version}")
+        _migrate_batches(connection)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()
     except sqlite3.Error as exc:

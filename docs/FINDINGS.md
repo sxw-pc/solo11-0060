@@ -101,8 +101,25 @@ manifest 解析失败只丢弃该 manifest，其他 manifest、文件和数据�
 | `SEQUENCE_GAP` | error | `contiguous` 策略下，source 内最小到最大序列号之间存在缺失 | 补充缺失批次或切换为 `gapped` |
 | `CHAIN_BROKEN` | error | `prev_batch_id` 指向的批次在同 source 有效 manifest 中不存在 | 修正前驱 ID 或补入前驱 manifest |
 | `CHAIN_ORDER_INVALID` | error | 唯一匹配的前驱批次 `sequence` 大于或等于当前批次 | 修正序列或前驱关系 |
+| `DEPENDENCY_CYCLE` | error | `prev_batch_id` 依赖图中出现有向环（含自环） | 断开互相指向的前驱声明 |
 
-序列检查以 source 为作用域；`gapped` 仅关闭 `SEQUENCE_GAP`，不关闭链检查。缺口证据最多列出前 100 个缺失值，并标记 `samples_truncated`。
+序列检查以 source 为作用域；`gapped` 仅关闭 `SEQUENCE_GAP`，不关闭链检查。缺口证据最多列出前 100 个缺失值，并标记 `samples_truncated`。`DEPENDENCY_CYCLE` 的 `members` 是排序后的成环批次，`cycle` 按依赖方向给出闭环路径；每个环只报告一次，传播不会因环死循环。
+
+### 继承延迟
+
+| 代码 | 严重级别 | 检测逻辑 | 常见修复 |
+| --- | --- | --- | --- |
+| `INHERITED_LATE_BATCH` | error | 批次沿 `prev_batch_id` 链直接或间接挂到迟到批次或缺失前驱 | 先修复根因批次，再重放入湖链路 |
+
+迟到判定仍是按 `source + partition` 独立计算的（见 `LATE_BATCH`），继承只做下游传播、不改判定：
+
+- 每个批次沿声明的 `prev_batch_id` 链向上游走，最近的迟到批次是 `late` 根因；链上第一个不存在于有效 manifest 中的前驱是 `missing`（断链）根因，不走迟到分支；
+- 被排除在水位推进之外的未来事件批次永远不会成为继承根因（它们本身不迟到），但链条可以穿过它们继续向上追溯；
+- 根因批次保持原有记录：自身迟到的批次不会被改标为继承延迟；
+- 前驱 `batch_id` 重复（歧义）时不沿该边传播，重复本身由 `DUPLICATE_BATCH_ID` 报告；
+- 依赖图以 source 为作用域，跨 source 的前驱引用按缺失处理。
+
+证据字段：`root_kind`（`late`/`missing`）、`root_batch_id`（根因批次或缺失前驱 ID）、`path`（从根因到本批的 `batch_id` 链，根因在前）、`path_length`、`prev_batch_id`、`manifest_path`。同样的结论也会写入批次汇总（`inherited_late`、`inherited_root_*`、`inherited_path`）与台账 `batches` 表。
 
 ## 4. 证据字段
 

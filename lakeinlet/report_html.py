@@ -88,9 +88,15 @@ def _watermark_rows(result: AuditResult) -> str:
     return "".join(rows)
 
 
+def _inherited_label(batch: Any) -> str:
+    if not batch.inherited_late:
+        return "no"
+    return f"yes ({batch.inherited_root_kind}: {batch.inherited_root_batch_id})"
+
+
 def _batch_rows(result: AuditResult) -> str:
     if not result.batches:
-        return '<tr><td colspan="8" class="muted">无有效批次。</td></tr>'
+        return '<tr><td colspan="9" class="muted">无有效批次。</td></tr>'
     rows = []
     for batch in result.batches:
         event_range = "—"
@@ -109,6 +115,7 @@ def _batch_rows(result: AuditResult) -> str:
             f"<td>{_e(event_range)}</td>"
             f'<td class="num">{batch.record_count}</td>'
             f"<td>{'yes' if batch.late else 'no'}</td>"
+            f"<td>{_e(_inherited_label(batch))}</td>"
             "</tr>"
         )
     return "".join(rows)
@@ -195,7 +202,7 @@ def render_html(result: AuditResult) -> str:
 
   <h2>批次</h2>
   <div class="panel table-wrap"><table>
-    <thead><tr><th>数据源</th><th>batch_id</th><th class="num">序列</th><th>分区</th><th>声明时间</th><th>事件时间范围</th><th class="num">记录</th><th>迟到</th></tr></thead>
+    <thead><tr><th>数据源</th><th>batch_id</th><th class="num">序列</th><th>分区</th><th>声明时间</th><th>事件时间范围</th><th class="num">记录</th><th>迟到</th><th>继承延迟</th></tr></thead>
     <tbody>{_batch_rows(result)}</tbody>
   </table></div>
 

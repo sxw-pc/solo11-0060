@@ -16,7 +16,7 @@ from .models import (
     SourceSummary,
 )
 from .scanner import scan_batch
-from .sequence import find_sequence_findings
+from .sequence import apply_inherited_lateness, find_sequence_findings
 from .watermark import evaluate_watermarks, summarize_batches
 
 
@@ -131,6 +131,7 @@ def run_audit(config: AuditConfig) -> AuditResult:
         summaries, config.source_map, config.as_of
     )
     findings.extend(watermark_findings)
+    findings.extend(apply_inherited_lateness(summaries))
     findings = _dedupe_findings(findings)
 
     source_summaries = _source_summaries(config, scans, findings)

@@ -68,7 +68,7 @@
         <thead>
           <tr>
             <th>数据源</th><th>batch_id</th><th class="num">序列</th><th>分区</th>
-            <th>声明时间</th><th>事件时间范围</th><th class="num">记录</th><th>迟到</th>
+            <th>声明时间</th><th>事件时间范围</th><th class="num">记录</th><th>迟到</th><th>继承延迟</th>
           </tr>
         </thead>
         <tbody>
@@ -82,6 +82,7 @@
             <td class="mono">{{ batch.event_time_min or '—' }} ~ {{ batch.event_time_max or '—' }}</td>
             <td class="num">{{ batch.record_count }}</td>
             <td>{{ 'yes' if batch.late else 'no' }}</td>
+            <td>{{ 'yes (' ~ batch.inherited_root_kind ~ ': ' ~ batch.inherited_root_batch_id ~ ')' if batch.inherited_late else 'no' }}</td>
           </tr>
           {% endfor %}
         </tbody>
